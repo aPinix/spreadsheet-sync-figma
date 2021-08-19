@@ -1,0 +1,126 @@
+<div class="wrapper">
+  <div id="img-tooltip" class="img-tooltip"></div>
+
+  <div id="section-how-to" class="section section--no-pad-x min-h-xs">
+    <label class="mb-2">
+      <div class="flex items-center w-full px space-x-xs">
+        <span>Publish Steps:</span>
+        <span id="publish-status" class="text-sm"></span>
+      </div>
+    </label>
+
+    <div id ="slider" class="slider steps">
+      <div class="slider-item">
+        <div class="step" data-step="Click Share">
+          <img draggable="false" src="<%= require('./assets/images/step-1a.png') %>">
+        </div>
+      </div>
+      <div class="slider-item">
+        <div class="step" data-step="Change to anyone">
+          <img draggable="false" src="<%= require('./assets/images/step-2a.png') %>">
+        </div>
+      </div>
+      <div class="slider-item">
+        <div class="step" data-step="Done">
+          <img draggable="false" src="<%= require('./assets/images/step-3a.png') %>">
+        </div>
+      </div>
+      <!-- <div class="slider-item">
+        <div class="step" data-step="Click File">
+          <img draggable="false" src="<%= require('./assets/images/step-1.png') %>">
+        </div>
+      </div>
+      <div class="slider-item">
+        <div class="step" data-step="Publish to the web">
+          <img draggable="false" src="<%= require('./assets/images/step-2.png') %>">
+        </div>
+      </div>
+      <div class="slider-item">
+        <div class="step" data-step="Publish">
+          <img draggable="false" src="<%= require('./assets/images/step-3.png') %>">
+        </div>
+      </div> -->
+    </div>
+  </div>
+
+  <hr>
+
+  <div id="section-sheets-url" class="section min-h-xs">
+    <div class="flex items-center space-x">
+      <label class="flex-1" for="api-url">
+        <div class="flex items-center space-x-xs">
+          <span>Google Sheets Url:</span>
+          <!-- <span id="btn-re-check-link" class="btn-re-check-link" tooltip="Re-check link">
+            <img src="<%= require('./assets/icons/reload.svg') %>">
+          </span> -->
+          <span id="sheet-url-valid" class="text-sm"></span>
+        </div>
+
+        <div class="flex items-center form-group">
+          <img class="flex-none g-sheets-logo" src="<%= require('./assets/images/g-sheets.svg') %>">
+
+          <input id="api-url" class="input-url" value="" placeholder="https://docs.google.com/spreadsheets/...">
+
+          <span tooltip="Re-check link" style="margin: 0;">
+            <button id="btn-re-check-link" class="flex-none btn-check-link icon-only flat-success text-light"></button>
+          </span>
+
+          <span tooltip="Preview" style="margin: 0;">
+            <button id="preview-data" class="flex-none btn-preview icon-only flat text-light"></button>
+          </span>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <hr>
+
+  <div id="preview-section" class="section accordion accordion-collapsed">
+    <label>
+      <span class="flex-none">
+        JSON Preview:
+        <span id="btn-copy-to-clipboard" class="btn-copy-to-clipboard" tooltip="Copy to Clipboard">
+          <img src="<%= require('./assets/icons/copy.svg') %>">
+        </span>
+      </span>
+    </label>
+
+    <pre id="code-preview">
+      <span class="json-preview text-neutral">Click "Preview"</span>
+    </pre>
+
+    <textarea name="code-to-copy" id="code-to-copy" class="code-to-copy" cols="30" rows="10"></textarea>
+  </div>
+
+  <hr>
+
+  <div id="section-message" data-step="Step 1" class="flex flex-col items-center justify-center section min-h-sm bg-neutral">
+    <p id="title" class="flex flex-col items-center text-base font-bold space-y-sm">
+      <span class="flex items-center justify-center text-lg text-xl font-bold text-center count transition-fix">0</span>
+      <span class="text-lg text-center message transition-fix"></span>
+    </p>
+    <p id="subtitle" class="text-sm font-bold text-center opacity-50"></p>
+  </div>
+
+  <hr>
+
+  <!-- <div class="section min-h-xxs">
+    <label for="checkbox-override">
+      <span>Reset All Override:</span>
+      <input id="checkbox-override" type="checkbox" class="checkbox-override" value="">
+    </label>
+  </div>
+
+  <hr> -->
+
+  <div id="section-sync" class="flex items-center justify-center section space-x">
+    <button id="sync" class="flat">Sync</button>
+  </div>
+
+  <!-- <div id="footer" class="flex items-center justify-between h-full px footer">
+    <a href="https://www.figma.com/community/plugin/966291261554174793/Spreadsheet-Sync" id="docs-btn" class="outline">Documentation</a>
+    <a class="donate-btn" href="https://www.buymeacoffee.com/apinix" target="_blank">
+      <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee">
+    </a>
+  </div> -->
+</div>
