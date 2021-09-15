@@ -1,10 +1,14 @@
 <div class="wrapper">
   <div id="img-tooltip" class="img-tooltip"></div>
 
-  <div id="section-how-to" class="section section--no-pad-x min-h-xs">
+  <span id="more-info" class="btn-more-info">
+    <img src="<%= require('./assets/icons/info.svg') %>">
+  </span>
+
+  <div id="section-how-to" class="section section--no-pad-x min-h-xs accordion">
     <label class="mb-2">
       <div class="flex items-center w-full px space-x-xs">
-        <span>Publish Steps:</span>
+        <span>Public Sheet Steps:</span>
         <span id="publish-status" class="text-sm"></span>
       </div>
     </label>
@@ -25,29 +29,14 @@
           <img draggable="false" src="<%= require('./assets/images/step-3a.png') %>">
         </div>
       </div>
-      <!-- <div class="slider-item">
-        <div class="step" data-step="Click File">
-          <img draggable="false" src="<%= require('./assets/images/step-1.png') %>">
-        </div>
-      </div>
-      <div class="slider-item">
-        <div class="step" data-step="Publish to the web">
-          <img draggable="false" src="<%= require('./assets/images/step-2.png') %>">
-        </div>
-      </div>
-      <div class="slider-item">
-        <div class="step" data-step="Publish">
-          <img draggable="false" src="<%= require('./assets/images/step-3.png') %>">
-        </div>
-      </div> -->
     </div>
   </div>
 
   <hr>
 
   <div id="section-sheets-url" class="section min-h-xs">
-    <div class="flex items-center space-x">
-      <label class="flex-1" for="api-url">
+    <div class="w-full flex flex-col">
+      <label>
         <div class="flex items-center space-x-xs">
           <span>Google Sheets Url:</span>
           <!-- <span id="btn-re-check-link" class="btn-re-check-link" tooltip="Re-check link">
@@ -55,41 +44,112 @@
           </span> -->
           <span id="sheet-url-valid" class="text-sm"></span>
         </div>
+      </label>
 
-        <div class="flex items-center form-group">
-          <img class="flex-none g-sheets-logo" src="<%= require('./assets/images/g-sheets.svg') %>">
+      <div class="w-full flex items-center form-group">
+        <img class="flex-none g-sheets-logo" src="<%= require('./assets/images/g-sheets.svg') %>">
 
-          <input id="api-url" class="input-url" value="" placeholder="https://docs.google.com/spreadsheets/...">
+        <input id="api-url" class="flex-1 input-url" value="" placeholder="https://docs.google.com/spreadsheets/...">
 
-          <span tooltip="Re-check link" style="margin: 0;">
+        <div class="btns-actions">
+          <span tooltip="Re-check link">
             <button id="btn-re-check-link" class="flex-none btn-check-link icon-only flat-success text-light"></button>
           </span>
 
-          <span tooltip="Preview" style="margin: 0;">
+          <span tooltip="Preview">
             <button id="preview-data" class="flex-none btn-preview icon-only flat text-light"></button>
           </span>
+
+          <!-- <span tooltip="Advanced">
+            <button id="btn-advanced" class="flex-none btn-advanced icon-only flat-success text-light">A</button>
+          </span> -->
         </div>
-      </label>
+      </div>
     </div>
   </div>
 
   <hr>
 
-  <div id="preview-section" class="section accordion accordion-collapsed">
-    <label>
-      <span class="flex-none">
-        JSON Preview:
+  <!-- <div id="section-advanced" class="section min-h-xs">
+    <div class="flex items-center space-x">
+      <label>
+        <span class="flex-none">
+          Advanced:
+        </span>
+      </label>
+
+      <div class="flex flex-col">
+        <div class="flex items-center">
+          <div class="flex items-center space-x-xs">
+            <span>Title</span>
+            <span>This is a title</span>
+          </div>
+          <div class="flex items-center space-x-xs">
+            <span>Rows</span>
+            <span>4</span>
+          </div>
+          <div class="flex items-center space-x-xs">
+            <span>Columns</span>
+            <span>9</span>
+          </div>
+        </div>
+
+        <select name="sheet-select" id="sheet-select" class="sheet-select" placeholder="Select Sheet">
+          <option value="sheet1">Sheet 1</option>
+          <option value="sheet2">Sheet 2</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <hr> -->
+
+  <div id="preview-section" class="section section--no-pad-x section--no-pad-y accordion accordion-collapsed">
+    <div class="tabs">
+      <input type="radio" class="tab tab-preadsheet" name="tabs" value="1" id="tabSpreadsheet" checked/>
+      <label for="tabSpreadsheet">Spreadsheet</label>
+      <input type="radio" class="tab tab-json" name="tabs" value="2" id="tabJson"/>
+      <label for="tabJson">
+        JSON
         <span id="btn-copy-to-clipboard" class="btn-copy-to-clipboard" tooltip="Copy to Clipboard">
           <img src="<%= require('./assets/icons/copy.svg') %>">
         </span>
-      </span>
-    </label>
+      </label>
 
-    <pre id="code-preview">
-      <span class="json-preview text-neutral">Click "Preview"</span>
-    </pre>
+      <div class="tab-content tab-content-spreadsheet">
+        <div class="tab-content-inner">
+          <div id="table-info" class="table-info space-x">
+            <div class="table-info-rename flex items-center space-x">
+              <div class="flex items-center space-x-xs combo-single">
+                <span class="mouse-click"></span>
+              </div>
+              <span class="text">or</span>
+              <div class="flex items-center space-x-xs combo-multi">
+                <span class="hotkey">SHIFT</span>
+                <span class="text">+</span>
+                <span class="mouse-click"></span>
+              </div>
+            </div>
 
-    <textarea name="code-to-copy" id="code-to-copy" class="code-to-copy" cols="30" rows="10"></textarea>
+            <div class="table-info-layer-needs-selection flex items-center space-x-xs">
+              <span class="text">(select only</span>
+              <span class="hotkey">1 LAYER</span>
+              <span class="text">to be able to click on a table cell to rename it)</span>
+            </div>
+          </div>
+
+          <table id="data-table">
+          </table>
+        </div>
+      </div>
+
+      <div class="tab-content tab-content-json">
+        <pre id="code-preview">
+          <span class="json-preview text-neutral">Click "Preview"</span>
+        </pre>
+      </div>
+      <textarea name="code-to-copy" id="code-to-copy" class="code-to-copy" cols="30" rows="10"></textarea>
+    </div>
   </div>
 
   <hr>
@@ -117,10 +177,40 @@
     <button id="sync" class="flat">Sync</button>
   </div>
 
-  <!-- <div id="footer" class="flex items-center justify-between h-full px footer">
-    <a href="https://www.figma.com/community/plugin/966291261554174793/Spreadsheet-Sync" id="docs-btn" class="outline">Documentation</a>
-    <a class="donate-btn" href="https://www.buymeacoffee.com/apinix" target="_blank">
-      <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee">
-    </a>
-  </div> -->
+  <div id="more-info-modal" class="more-info-modal">
+    <div id="modal-overlay" class="modal-overlay"></div>
+
+    <div class="modal flex flex-col">
+      <button id="close-modal" class="btn-close-modal basic icon-only">
+        <img src="<%= require('./assets/icons/close.svg') %>">
+      </button>
+
+      <div class="modal-content flex flex-col items-center space-y">
+        <a href="https://www.figma.com/community/plugin/966291261554174793/Spreadsheet-Sync" target="_blank" class="flex flex-col items-center space-y-sm">
+          <div class="flex flex-col items-center">
+            <p class="text-lg text-brand font-bold">Spreadsheet Sync</p>
+            <p class="text-neutral">Figma Plugin</p>
+          </div>
+
+          <img class="logo-img" src="<%= require('./assets/images/logo.svg') %>" alt="Spreadsheet Sync - Figma Plugin">
+        </a>
+
+        <div class="flex flex-col text-center">
+          <p>Thank you for using this plugin!</p>
+          <p>Made with ❤️ from Portugal!</p>
+        </div>
+
+        <a href="https://apinix.gitbook.io/figma-spreadsheet-sync/" target="_blank" class="outline">Documentation</a>
+
+        <hr>
+
+        <div class="flex flex-col items-center space-y-sm">
+          <a href="https://twitter.com/aPinix" target="_blank" rel="nofollow"><img src="https://camo.githubusercontent.com/6b9340a91aafbcd1ec3605710dddf884ba36ce0ed3350fc914f4ddc4da7c8dc2/68747470733a2f2f696d672e736869656c64732e696f2f747769747465722f666f6c6c6f772f6150696e69783f6c6162656c3d466f6c6c6f77" alt="Twitter Follow" data-canonical-src="https://img.shields.io/twitter/follow/aPinix?label=Follow" style="max-width: 100%;"></a>
+          <a class="donate-btn" href="https://www.buymeacoffee.com/apinix" target="_blank">
+            <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee">
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>

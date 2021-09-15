@@ -1,6 +1,10 @@
+console.clear();
+
 // imports --------------------
 import { placeholderImage } from './placeholder';
 import { API_KEY } from './api-key';
+import { ChangeTypes, LayerNameSuffix, SuffixSpecial, TextHasPlaceholders, UrlData, UrlDataType } from './models';
+import { layerNamePrefix, selectDebug } from './variables';
 
 
 
@@ -14,8 +18,12 @@ const lsApiUrl = 'apiUrl';
 // global vars --------------------
 
 // global vars: window size
-let appWindowWidth = 380;
-let appWindowHeight = 494;
+let appWindowDefaultWidth = 380;
+let appWindowDefaultHeight = 494;
+let appWindowBigWidth = 750;
+let appWindowBigHeight = 700;
+let appWindowWidth = appWindowDefaultWidth;
+let appWindowHeight = appWindowDefaultHeight;
 
 // set figma plugin on inspector at start
 figma.root.setRelaunchData({
@@ -26,31 +34,7 @@ figma.root.setRelaunchData({
 let placeholderImageFill: any[];
 
 // variable for random-save type
-let randomSaveLocalStorage: number;
-
-
-
-// enums --------------------
-
-// enums: layer types
-export const enum ChangeTypes {
-  TEXT = 'text',
-  COLOR = 'color',
-  SHOW_HIDE = 'show-hide',
-  IMAGE = 'image',
-}
-
-
-
-// layer types --------------------
-
-// layer types: types (only if layer is type)
-const layerTextTypes = ['TEXT'];
-const layerColorFillTypes = ['FRAME', 'VECTOR', 'STAR', 'LINE', 'ELLIPSE', 'POLYGON', 'RECTANGLE', 'TEXT'];
-// const layerColorStrokeTypes = ['FRAME', 'VECTOR', 'STAR', 'LINE', 'ELLIPSE', 'POLYGON', 'RECTANGLE', 'TEXT'];
-const layerShowHideTypes = ['FRAME', 'GROUP', 'COMPONENT_SET', 'COMPONENT', 'INSTANCE', 'BOOLEAN_OPERATION', 'VECTOR', 'STAR', 'LINE', 'ELLIPSE', 'POLYGON', 'RECTANGLE', 'TEXT'];
-const layerImageTypes = ['FRAME', 'INSTANCE', 'VECTOR', 'STAR', 'LINE', 'ELLIPSE', 'POLYGON', 'RECTANGLE'];
-// 'SLICE' | 'FRAME' | 'GROUP' | 'COMPONENT_SET' | 'COMPONENT' | 'INSTANCE' | 'BOOLEAN_OPERATION' | 'VECTOR' | 'STAR' | 'LINE' | 'ELLIPSE' | 'POLYGON' | 'RECTANGLE' | 'TEXT'
+let randomSaveNumber: number;
 
 
 
@@ -101,7 +85,7 @@ figma.ui.onmessage = async (msg) => {
     } else {
       placeholderImageFill = [
         { type: 'IMAGE', scaleMode: 'FILL', imageHash },
-      ];;
+      ];
     }
   }
 
@@ -112,25 +96,36 @@ figma.ui.onmessage = async (msg) => {
 
   // get data from url
   if (msg.type === 'get-data') {
-    const url = getSpreadsheetAsApi(msg.url);
+    let urlData: UrlData;
+    let msgType: string;
+
+    if (msg.isCheckUrl) {
+      urlData = getSpreadsheetData(msg.url, UrlDataType.SHEET);
+      msgType = 'get-api-data-sheet';
+    } else {
+      urlData = getSpreadsheetData(msg.url, UrlDataType.VALUES);
+      msgType = 'get-api-data-values';
+    }
 
     figma.ui.postMessage({
-      type: 'get-api-data',
-      url,
+      type: msgType,
+      url: urlData.url,
+      dataType: urlData.type,
       isPreview: msg.isPreview,
       isCheckUrl: msg.isCheckUrl,
+      spreadsheetData: msg.spreadsheetData || null,
     });
   }
 
   // parse spreadsheet data and process layers
   if (msg.type === 'spreadsheet-data') {
     const data = JSON.parse(msg.data);
+    // console.log('data:', data);
     // const authorEmail = data.feed.author[0].email.$t;
     // const authorName = data.feed.author[0].name.$t;
     // const dateUpdated = data.feed.updated.$t; // '2021-04-20T16:56:11.878Z'
     // const sheetTitle = data.feed.title.$t; //  'Sheet1'
-    const rowsData: any[] = spreadsheetToJson(data.values);
-    // console.log('rowsData:', rowsData);
+    const rowsData: any[] = spreadsheetDataToJson(data.values);
 
     if (msg.isPreview) {
       let prettyJson = syntaxHighlight(rowsData);
@@ -171,8 +166,37 @@ figma.ui.onmessage = async (msg) => {
     }
   }
 
+  if (msg.type === 'table-elem-click') {
+    const selection = figma.currentPage.selection;
+    const countSelection = figma.currentPage.selection.length;
+    let singleNamingLayer;
+
+    if (countSelection === 1) {
+      selection.forEach(selectedNode => {
+        if (!msg.isShift) {
+          selectedNode.name = msg.value;
+          singleNamingLayer = msg.value;
+        } else {
+          const layerName = changeLayerNameMultiple(selectedNode.name, msg.value);
+          selectedNode.name = layerName;
+          singleNamingLayer = layerName;
+        }
+      });
+    } else {
+      // error: only 1 layer selected
+    }
+
+    figma.ui.postMessage({ type: 'update-table-selected', layerNames: [singleNamingLayer], layerCount: countSelection });
+  }
+
+  if (msg.type === 'open-preview') {
+    figma.ui.postMessage({ type: 'open-advance-preview' });
+    figma.ui.resize(appWindowBigWidth, appWindowBigHeight);
+  }
+
   if (msg.type === 'close-preview') {
-    figma.ui.postMessage({ type: 'close-json-preview' });
+    figma.ui.postMessage({ type: 'close-advance-preview' });
+    figma.ui.resize(appWindowDefaultWidth, appWindowDefaultHeight);
   }
 };
 
@@ -182,208 +206,201 @@ figma.ui.onmessage = async (msg) => {
 
 function figmaPopulateSheetSync(data: any[]): void {
   const selection = figma.currentPage.selection;
-  const clonedSelection = Object.assign([], selection);
-  const jsonTypes = getJsonWithTypes(data);
+  const selectionCount = figma.currentPage.selection.length;
 
-  const countSelection = figma.currentPage.selection.length;
-  let indexData = 0;
   let countLayersChanged = 0;
 
-  for (let indexSelection in clonedSelection) {
-    const index: number = parseInt(indexSelection);
-    const frame = clonedSelection[index] as FrameNode;
+  // for each selection populate children with values from spreadsheet
+  selection.map((nodeMain: any, index: number) => {
+    randomSaveNumber = Math.floor(Math.random() * (data.length));
 
-    randomSaveLocalStorage = Math.floor(Math.random() * (jsonTypes.length));
+    if (nodeMain.children) {
+      nodeMain.findAll((node: any) => {
+        if (node.name.startsWith(layerNamePrefix)) {
+          const nameArray = node.name.split('#').filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
 
-    if (jsonTypes[indexData] === undefined) {
-      indexData = 0;
-    }
+          const prepareToChangeLayers = (node: any, name: string) => {
+            const layerSuffix: LayerNameSuffix = getLayerNameSuffix(name);
+            const layerValue = getValueFromLayerName(layerSuffix, data, name, index);
 
-    if (frame.children) {
-      const sheetColNames = Object.keys(jsonTypes[indexData]).map((key) => {
-        const name = `#${formatName(key)}`;
-        return name;
-      });
-      const sheetColTypes = Object.keys(jsonTypes[indexData]).map((key) => {
-        return jsonTypes[indexData][key].type;
-      });
-      const sheetColValues = Object.keys(jsonTypes[indexData]).map((key) => {
-        return jsonTypes[indexData][key].value;
-      });
-
-      const frame = clonedSelection[index] as FrameNode;
-
-      frame.findAll((node) => {
-        const name = formatName(node.name);
-
-        // check if name has more than 1 '#' (column)
-        const nameArray = name.split('#').filter((str: string) => str !== '').map((str: string) => `#${str}`);
-
-        if (nameArray.length > 1) {
-          nameArray.map((nameStr, i) => {
-            const layerName = formatLayerName(nameStr);
-            const replaceByType = getNameReplaceByType(nameArray[i]);
-
-            if (sheetColNames.includes(layerName)) {
-              countLayersChanged++;
-              const idx = sheetColNames.indexOf(layerName);
-              const type = sheetColTypes[idx];
-              const value = getValueReplace(replaceByType, jsonTypes, layerName) || sheetColValues[idx];
-              changeLayers(node, index, type, value);
-            }
-          });
-        } else {
-          const layerName = formatLayerName(name);
-          const replaceByType = getNameReplaceByType(nameArray[0]);
-
-          if (sheetColNames.includes(layerName)) {
-            countLayersChanged++;
-            const idx = sheetColNames.indexOf(layerName);
-            const type = sheetColTypes[idx];
-            const value = getValueReplace(replaceByType, jsonTypes, layerName) || sheetColValues[idx];
-            changeLayers(node, index, type, value);
+            changeLayers(node, layerValue);
           }
-        }
 
-        return null;
+          if (nameArray.length > 1) {
+            nameArray.map(layerName => {
+              prepareToChangeLayers(node, layerName);
+            });
+          } else {
+            prepareToChangeLayers(node, node.name);
+          }
+          countLayersChanged++;
+        }
       });
 
       // if last element notify
-      if (index === clonedSelection.length - 1) {
+      if (index === selection.length - 1) {
         figma.notify(
-          `Sync Complete ✅ - [${countLayersChanged}] layer${countLayersChanged > 1 ? 's' : ''} changed based on [${countSelection}] selection${countSelection > 0 ? 's' : '' }`,
+          `Sync Complete ✅ - [${countLayersChanged}] layer${countLayersChanged > 1 ? 's' : ''} changed based on [${selectionCount}] selection${selectionCount > 0 ? 's' : '' }`,
           { timeout: 5000 }
         );
         // figma.closePlugin();
       }
     }
+  });
+}
 
-    indexData++;
+function getChangeCateoryBasedOnNodeTypeAndValue(type: NodeType, value: string): ChangeTypes {
+  // is color fill
+  if (
+    value.startsWith('/#') &&                                  // starts with '/#'
+    !value.includes('|')                                       // doesn't include the '|' character
+  ) { return ChangeTypes.COLOR_FILL }
+
+  // is color stroke
+  else if (
+    value.includes('|') &&                                     // includes the '|' character
+    value.match(new RegExp(`^\/([0-9]+)?\|#`, 'g'))            // starts with '/|#' or '/2|#'
+  ) { return ChangeTypes.COLOR_STROKE }
+
+  // is show/hide
+  else if (
+    value.toLowerCase().startsWith('/show') ||                 // starts with '/show' or '/Show'
+    value.toLowerCase().startsWith('/hide')                    // starts with '/hide' or '/Hide'
+  ) { return ChangeTypes.SHOW_HIDE }
+
+  // is image
+  else if (
+    value.toLowerCase().match(new RegExp(`^http(s)?://`, 'g')) // starts with 'http://' or 'https://'
+  ) { return ChangeTypes.IMAGE }
+
+  // is variant
+  else if (
+    type === 'INSTANCE' &&                                     // if type is instance
+    value.includes('=')                                        // includes the '=' character
+  ) { return ChangeTypes.VARIANT }
+
+  // is text (fallback)
+  else if (
+    type === 'TEXT'                                            // if type is text
+  ) { return ChangeTypes.TEXT }
+
+  else {
+    return null;
   }
 }
 
-function formatLayerName(name: string): string {
-  if (name.includes('.')) {
-    return name.split('.')[0];
-  } else {
-    return name;
-  }
-}
+async function changeLayers(node: any, value: any): Promise<void> {
+  const type: ChangeTypes = getChangeCateoryBasedOnNodeTypeAndValue(node.type, value);
+  // console.log('type:', type);
+  // console.log('node:', node);
+  // console.log('name:', node.name);
+  // console.log('value:', value);
+  // console.log('--------------------');
 
-function getNameReplaceByType(name: string): string | number {
-  const regexRandom = /\.rand$/g;
-  const regexRandomResult = name.match(regexRandom);
-  if (regexRandomResult) {
-    return 'random';
-  }
+  if (type) {
+    // change text
+    if (type === ChangeTypes.TEXT) {
+      await figma.loadFontAsync(node.fontName as FontName);
 
-  const regexRandomSave = /\.randsave$/g;
-  const regexRandomSaveResult = name.match(regexRandomSave);
-  if (regexRandomSaveResult) {
-    return 'random-save';
-  }
+      // reset text
+      const layerOriginalName = getOriginalTextIfInsideInstanceComponent(node);
+      if (layerOriginalName) {
+        if (stringHasPlaceholdersInsideText(layerOriginalName).hasPlaceholders) {
+          node.characters = layerOriginalName;
+        }
+      }
 
-  const regexNumber = /\.[0-9]*/g;
-  const regexNumberResult = name.match(regexNumber);
-  if (regexNumberResult) {
-    const stringToNumber = regexNumberResult[0].replace('.', '');
-    return +stringToNumber;
-  }
-
-  return '';
-}
-
-function getValueReplace(type: string | number, data: any, layerName: string): string {
-  layerName = layerName.replace('#', '');
-
-  if (typeof type === 'string' && type === 'random') {
-    const positionIndex = Math.floor(Math.random() * (data.length));
-    const value = data[positionIndex][layerName];
-    return value?.value || value;
-  }
-
-  if (typeof type === 'string' && type === 'random-save') {
-    const positionIndex = randomSaveLocalStorage;
-    const value = data[positionIndex][layerName];
-    return value?.value || value;
-  }
-
-  if (typeof type === 'number') {
-    const positionIndex = type - 1 > data.length ? data.length - 1 : type - 1;
-    const value = data[positionIndex][layerName];
-    return value?.value || value;
-  }
-
-  return null;
-}
-
-async function changeLayers(node: any, index: number, type: any, value: any): Promise<void> {
-  // is text
-  if (layerTextTypes.includes(node.type) && type === ChangeTypes.TEXT) {
-    const placeholder = hasPlaceholders(node.characters);
-    let phrase = placeholder.phrase;
-
-    await figma.loadFontAsync(node.fontName as FontName);
-
-    // // reset text
-    // const textLength = node.characters.length;
-    // node.deleteCharacters(0, textLength - 1);
-
-    if (placeholder.hasPlaceholders) {
-      placeholder.placeholders.map((ph: string) => {
-        phrase = phrase.replace(ph, value);
-      });
-      node.characters = phrase;
-    } else {
-      node.characters = value;
+      const placeholder = stringHasPlaceholdersInsideText(node.characters);
+      let phrase = placeholder.phrase;
+      if (placeholder.hasPlaceholders) {
+        placeholder.placeholders.map((ph: string) => {
+          phrase = phrase.replace(ph, value);
+        });
+        node.characters = phrase;
+      } else {
+        node.characters = value;
+      }
     }
-  }
 
-  // is color (fill)
-  if (layerColorFillTypes.includes(node.type) && type === ChangeTypes.COLOR) {
-    if ('fills' in node) {
-      if (
-        Array.isArray(node.fills) &&
-        node.fills.length &&
-        node.fills[0].type !== 'IMAGE'
-      ) {
-        const fills = JSON.parse(JSON.stringify(node.fills));
-        const newColor = getRGB(hexToRgb(value));
-        fills[0].color = newColor;
+    // change color fill
+    if (type === ChangeTypes.COLOR_FILL) {
+      if (node?.fills) {
+        const colorHex = getColorHexFromValue(value);
+        const colorRgba = convertColoHexToRgba(colorHex);
+        const color: RGB = getFigmaColorRGB(colorRgba);
+        const fills = [{ type: 'SOLID', color: { r: color.r, g: color.g, b: color.b }, opacity: colorRgba.a }];
+        // const fills = {
+        //   type: 'SOLID',
+        //   visible: true,
+        //   opacity: color.a,
+        //   blendMode: 'NORMAL',
+        //   color: {
+        //     r: color.r,
+        //     g: color.g,
+        //     b: color.b
+        //   }
+        // }
         node.fills = fills;
       }
     }
-  }
 
-  // is color (stroke)
-  // if (layerColorStrokeTypes.includes(node.type) && type === ChangeTypes.COLOR) {
-  // }
-
-  // is show/hide
-  if (
-    layerShowHideTypes.includes(node.type) &&
-    type === ChangeTypes.SHOW_HIDE
-  ) {
-    if (value === 'show') {
-      node.visible = true;
-    } else if (value === 'hide') {
-      node.visible = false;
+    // change color stroke
+    if (type === ChangeTypes.COLOR_STROKE) {
+      if (node?.strokes) {
+        let strokeWeight = value.match(new RegExp(`^\/(?:[0-9]+)(\|#)`, 'g'));
+        if (strokeWeight) strokeWeight = strokeWeight[0].match(new RegExp(`[0-9]+`, 'g'))[0];
+        const colorHex = getColorHexFromValue(value);
+        const colorRgba = convertColoHexToRgba(colorHex);
+        const color: RGB = getFigmaColorRGB(colorRgba);
+        const strokes = [{ type: 'SOLID', color: { r: color.r, g: color.g, b: color.b }, opacity: colorRgba.a }];
+        // const strokes = {
+        //   type: 'SOLID',
+        //   visible: true,
+        //   opacity: color.a,
+        //   blendMode: 'NORMAL',
+        //   color: {
+        //     r: color.r,
+        //     g: color.g,
+        //     b: color.b
+        //   }
+        // }
+        node.strokes = strokes;
+        node.strokeAlign = 'INSIDE'; // 'INSIDE' | 'OUTSIDE' | 'CENTER'
+        if (strokeWeight) node.strokeWeight = +strokeWeight;
+      }
     }
-  }
 
-  // is image
-  if (layerImageTypes.includes(node.type) && type === ChangeTypes.IMAGE) {
-    if ('fills' in node) {
-      if (Array.isArray(node.fills) && node.fills.length) {
-        // while fetching image
-        // node.fills = placeholderImageFill;
+    // change variant
+    if (type === ChangeTypes.VARIANT) {
+      const variantSet = node?.mainComponent?.parent;
+      if (variantSet && variantSet.type === 'COMPONENT_SET') {
+        const variant = variantSet.findChild(n => n.name === value)
+        node.swapComponent(variant);
+      }
+    }
+
+    // change show/hide
+    if (type === ChangeTypes.SHOW_HIDE) {
+      const formattedValue = value.toLowerCase().replace('/', '');
+
+      if (formattedValue === 'show') {
+        node.visible = true;
+      } else if (formattedValue === 'hide') {
+        node.visible = false;
+      }
+    }
+
+    // change image
+    if (type === ChangeTypes.IMAGE) {
+      if (node?.fills) {
+        // while fetching image use placeholder
+        node.fills = placeholderImageFill;
 
         // actual image
         figma.ui.postMessage({
           type: 'process-image',
           imageUrl: value,
           nodeId: node.id,
-          index,
           isPlaceholder: false
         });
       }
@@ -391,35 +408,88 @@ async function changeLayers(node: any, index: number, type: any, value: any): Pr
   }
 }
 
-function checkForUserSelections(): boolean {
-  if (figma.currentPage.selection.length > 0) {
-    const selection = figma.currentPage.selection;
-    const clonedSelection = Object.assign([], selection);
-    const shildrenArray = [];
-    for (let index in clonedSelection) {
-      const frame = clonedSelection[index] as FrameNode;
-      shildrenArray.push(frame.children);
+function getValueFromLayerName(layerSuffix: LayerNameSuffix, data: any, layerName: string, row: number): string {
+  layerName = getLayerNameWithoutPrefixAndSuffix(layerName);
+
+  if (layerSuffix) {
+    if (typeof layerSuffix === 'string' && layerSuffix === SuffixSpecial.RANDOM) {
+      const positionIndex = Math.floor(Math.random() * (data.length));
+      const value = data[positionIndex][layerName];
+      return value;
     }
 
-    // if all selections have children (to process)
-    const allSelectionsHaveChildren = shildrenArray.every(child => child !== undefined);
+    if (typeof layerSuffix === 'string' && layerSuffix === SuffixSpecial.RANDOM_SAVE) {
+      const positionIndex = randomSaveNumber;
+      const value = data[positionIndex][layerName];
+      return value;
+    }
 
-    const count = figma.currentPage.selection.length;
+    if (typeof layerSuffix === 'number') {
+      const positionIndex = layerSuffix > data.length - 1 ? data.length - 1 : layerSuffix - 1;
+      const value = data[positionIndex][layerName];
+      return value;
+    }
+  } else {
+    const positionIndex = row;
+    const value = data[positionIndex][layerName];
+    return value;
+  }
+}
+
+function getOriginalTextIfInsideInstanceComponent(textNode: TextNode): string {
+  // const mainNodeSelectedId = mainNodeSelected.id;
+  const textNodeId = textNode.id;
+  const textNodeIdArray = textNodeId.split(';');
+  const textNodeIdCleanArray = textNodeIdArray.map(name => name.replace(/([a-z]|[A-Z])/g, ''));
+  const textNodeSingleId = textNodeIdArray[textNodeIdArray.length - 1];
+  let nodeTextCharacters;
+
+  if (textNodeIdArray.length > 1) {
+    const instanceId = textNodeIdCleanArray[textNodeIdCleanArray.length - 2];
+    const mainComponent = (figma.getNodeById(instanceId) as InstanceNode).mainComponent as ComponentNode;
+
+    mainComponent.findAll(node => {
+      if (node.type === 'TEXT' && node.id === textNodeSingleId) {
+        nodeTextCharacters = (node as TextNode).characters;
+      }
+      return null;
+    });
+  }
+
+  return nodeTextCharacters;
+}
+
+function checkForUserSelections(): void {
+  const layerSelction = figma.currentPage.selection;
+  const layerSelctionCount = layerSelction.length;
+
+  const layerNamesArray = getLayerNames();
+
+  if (layerSelctionCount > 0) {
+    // if all selections have children (to process)
+    const allSelectionsHaveChildren = layerSelction.every(node => (node as FrameNode).children);
+
+    if (selectDebug) {
+      layerSelction.map(node => console.log( node));
+    }
+
     if (allSelectionsHaveChildren) {
       figma.ui.postMessage({
         type: 'layers',
-        message: `${count > 1 ? 'layers' : 'layer'} selected`,
-        message2: `Ready to sync!`,
+        message: `${layerSelctionCount > 1 ? 'layers' : 'layer'} selected`,
+        description: `Ready to sync!`,
         color: 'success',
-        layers: count,
+        layerNames: layerNamesArray,
+        layerCount: layerSelctionCount,
       });
     } else {
       figma.ui.postMessage({
         type: 'layers',
-        message: `${count > 1 ? 'layers' : 'layer'} selected`,
-        message2: `Select only layers that have children.`,
+        message: `${layerSelctionCount > 1 ? 'layers' : 'layer'} selected`,
+        description: `Select only layers that have children.`,
         color: 'warning',
-        layers: count,
+        layerNames: layerNamesArray,
+        layerCount: layerSelctionCount,
       });
     }
 
@@ -428,14 +498,14 @@ function checkForUserSelections(): boolean {
     figma.ui.postMessage({
       type: 'layers',
       message: `layers selected`,
-      message2: `Select at least 1 layer!`,
+      description: `Select at least 1 layer!`,
       color: 'error',
-      layers: 0,
+      layerNames: layerNamesArray,
+      layerCount: 0,
     });
 
     // figma.root.setRelaunchData({});
   }
-  return;
 }
 
 
@@ -446,16 +516,30 @@ function getSpreadsheetId(sheetUrl: string): string {
   return new RegExp('/spreadsheets/d/([a-zA-Z0-9-_]+)').exec(sheetUrl)[1];
 }
 
-function getSpreadsheetAsApi(url: string): string {
-  const sheetUrlPrefix = 'https://sheets.googleapis.com/v4/spreadsheets/';
-  const sheetId = getSpreadsheetId(url);
-  const sheetRange = 'A1:ZZZ100000000';
-  const jsonUrl = `${sheetUrlPrefix}${sheetId}/values/${sheetRange}?alt=json&key=${API_KEY}`;
+function getSpreadsheetData(url: string, type: UrlDataType): UrlData {
+  const sheetUrlPrefix: string = 'https://sheets.googleapis.com/v4/spreadsheets/';
+  const sheetId: string = getSpreadsheetId(url);
+  const sheetRange: string = 'A1:ZZZ100000000'; // https://developers.google.com/sheets/api/guides/concepts#a1_notation
+  let dataUrl: string;
+  let dataType: UrlDataType;
 
-  return jsonUrl;
+  if (type === UrlDataType.SHEET) {
+    dataUrl = `${sheetUrlPrefix}${sheetId}?alt=json&key=${API_KEY}`;
+    dataType = UrlDataType.SHEET;
+  }
+
+  if (type === UrlDataType.VALUES) {
+    dataUrl = `${sheetUrlPrefix}${sheetId}/values/${sheetRange}?alt=json&key=${API_KEY}`;
+    dataType = UrlDataType.VALUES;
+  }
+
+  return {
+    url: dataUrl,
+    type: dataType
+  }
 }
 
-function spreadsheetToJson(data) {
+function spreadsheetDataToJson(data) {
   const headers = data[0];
   return data
     .map((item, index) => {
@@ -479,81 +563,15 @@ function spreadsheetToJson(data) {
 
 
 
-// format data --------------------
-
-function getJsonWithTypes(data: any): any {
-  const jsonData = [];
-
-  data.map((node) => {
-    let nodeData = {};
-    Object.keys(node).map((key) => {
-      // is color
-      if ((node[key], node[key].startsWith('/#'))) {
-        nodeData = {
-          ...nodeData,
-          ...{
-            [key]: {
-              type: ChangeTypes.COLOR,
-              value: node[key].replace('/#', '#'),
-            },
-          },
-        };
-      }
-
-      // is show/hide
-      else if (
-        (node[key],
-        node[key].startsWith('/Show') || node[key].startsWith('/Hide'))
-      ) {
-        nodeData = {
-          ...nodeData,
-          ...{
-            [key]: {
-              type: ChangeTypes.SHOW_HIDE,
-              value: node[key].replace(/^\//, '').toLowerCase(),
-            },
-          },
-        };
-      }
-
-      // is image
-      else if (
-        (node[key],
-        node[key].startsWith('https://') || node[key].startsWith('http://'))
-      ) {
-        nodeData = {
-          ...nodeData,
-          ...{ [key]: { type: ChangeTypes.IMAGE, value: node[key] } },
-        };
-      }
-
-      // is text
-      else {
-        nodeData = {
-          ...nodeData,
-          ...{ [key]: { type: ChangeTypes.TEXT, value: node[key] } },
-        };
-      }
-    });
-    jsonData.push(nodeData);
-  });
-
-  return jsonData.map(item => {
-    return Object.keys(item).reduce((c, k) => (c[formatName(k.toLowerCase())] = item[k], c), {});
-  });
-}
-
-
-
 // utils --------------------
 
-function hasPlaceholders(str: string): { hasPlaceholders, placeholders, phrase } {
+function stringHasPlaceholdersInsideText(str: string): TextHasPlaceholders {
   const placeholders = [];
   let hasPlaceholders = false;
   const phrase = str.replace(/\{(.+?)\}/g, (inclusive, exclusive) => {
     // console.log(inclusive);
     // console.log(exclusive);
-    const match = formatName(inclusive);
+    const match = getLayerNameWithoutSpacesAndSpecialChars(inclusive);
     hasPlaceholders = true;
     placeholders.push(match);
     return match;
@@ -566,18 +584,114 @@ function hasPlaceholders(str: string): { hasPlaceholders, placeholders, phrase }
   }
 }
 
-function formatName(str: string): string {
+function getLayerNameWithoutPrefixAndSuffix(name: string): string {
+  return getLayerNameWithoutSuffix(getLayerNameWithoutPrefix(name));
+}
+
+function getLayerNameWithoutPrefix(name: string): string {
+  return name.replace(layerNamePrefix, '');
+}
+
+function getLayerNameWithoutSuffix(name: string): string {
+  return name.includes('.') ? name.split('.')[0] : name;
+}
+
+function getLayerNameSuffix(name: string): LayerNameSuffix {
+  const regexRandom = new RegExp(`\.${SuffixSpecial.RANDOM}$`, 'g');
+  if (name.match(regexRandom)) {
+    return SuffixSpecial.RANDOM;
+  }
+
+  const regexRandomSave = new RegExp(`\.${SuffixSpecial.RANDOM_SAVE}$`, 'g');
+  if (name.match(regexRandomSave)) {
+    return SuffixSpecial.RANDOM_SAVE;
+  }
+
+  const regexNumber = /\.[0-9]*/g;
+  const regexNumberResult = name.match(regexNumber);
+  if (regexNumberResult) {
+    const stringToNumber = regexNumberResult[0].replace('.', '');
+    return +stringToNumber;
+  }
+
+  return '';
+}
+
+function getLayerNameWithoutSpacesAndSpecialChars(str: string): string {
   return str.toLowerCase().replace(/\s/g, '').replace('-', '').replace('_', '');
 }
 
-function getRGB({ r, g, b }): { r: number, g: number, b: number } {
+function getLayerNames(): string[] {
+  return figma.currentPage.selection.length > 0 ? figma.currentPage.selection.map(node => node.name) : [];
+}
+
+function changeLayerNameMultiple(layerNameOld, layerNameNew): string {
+  const layerNameOldArray = layerNameOld.split('#').filter(str => str !== '').map(str => `#${str}`);
+  const layerNameOldArrayNoSuffix = layerNameOldArray.map(str => str.split('.')[0]);
+  const layerNameNewNoSuffix = layerNameNew.split('.')[0];
+
+  if (layerNameOldArrayNoSuffix.includes(layerNameNewNoSuffix)) {
+    let layerNameCurrent: string;
+    const layerNameOldIndex = layerNameOldArrayNoSuffix.indexOf(layerNameNewNoSuffix);
+    const layerNameOldMatch = layerNameOldArray[layerNameOldIndex];
+
+    if (layerNameOldMatch === layerNameNew) {
+      if (layerNameOldArray.length > 1) {
+        layerNameOldArray.splice(layerNameOldIndex, 1);
+      }
+    } else {
+      layerNameOldArray[layerNameOldIndex] = layerNameNew;
+    }
+
+    layerNameCurrent = layerNameOldArray.join('');
+
+    return layerNameCurrent;
+  } else {
+    return `${layerNameOld}${layerNameNew}`;
+  }
+}
+
+
+
+// colors --------------------
+
+function getColorHexFromValue(value): string {
+  const regexColorHex = new RegExp(`(#[0-9a-fA-F]+)`, 'g');
+  return value.match(regexColorHex)[0] || null;
+}
+
+function convertColoHexToRgba(hex: string, alpha: number = 1): RGBA {
+  const isValidHex = (hex) => /^#([A-Fa-f0-9]{3,4}){1,2}$/.test(hex);
+  const getChunksFromString = (st, chunkSize) => st.match(new RegExp(`.{${chunkSize}}`, 'g'));
+  const convertHexUnitTo256 = (hexStr) => parseInt(hexStr.repeat(2 / hexStr.length), 16);
+  const getAlphafloat = (a, alpha) => {
+    if (typeof a !== 'undefined') return a / 255;
+    if (typeof alpha != 'number' || alpha < 0 || alpha > 1) return 1;
+    return alpha;
+  }
+
+  if (!isValidHex(hex)) return null;
+
+  const chunkSize = Math.floor((hex.length - 1) / 3);
+  const hexArr = getChunksFromString(hex.slice(1), chunkSize);
+  const [r, g, b, a] = hexArr.map(convertHexUnitTo256);
+  alpha = getAlphafloat(a, alpha);
+  return { r, g, b, a: alpha }
+}
+
+function getFigmaColorRGB({ r, g, b, a }: RGBA): RGB {
   const rgbColorArray = [r, g, b].map((channel) => channel / 255);
+
   return {
     r: rgbColorArray[0],
     g: rgbColorArray[1],
     b: rgbColorArray[2],
   };
 }
+
+
+
+// images --------------------
 
 function generateImagePlaceholder(): void {
   figma.ui.postMessage({
@@ -587,22 +701,10 @@ function generateImagePlaceholder(): void {
   });
 }
 
-function hexToRgb(hex: string): { r: number, g: number, b: number } {
-  // Expand shorthand form (e.g. "03F") to full form (e.g. "0033FF")
-  var shorthandRegex = /^#?([a-f\d])([a-f\d])([a-f\d])$/i;
-  hex = hex.replace(shorthandRegex, (m, r, g, b) => {
-    return r + r + g + g + b + b;
-  });
 
-  var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return result
-    ? {
-      r: parseInt(result[1], 16),
-      g: parseInt(result[2], 16),
-      b: parseInt(result[3], 16),
-    }
-    : null;
-}
+
+
+// code highlight --------------------
 
 function syntaxHighlight(json: string | object): string {
   if (typeof json !== 'string') {

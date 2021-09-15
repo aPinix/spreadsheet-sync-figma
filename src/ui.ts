@@ -1,9 +1,19 @@
+import { RequestMessage, RequestType } from './models';
 import './ui.scss';
 
 // sheet is public
 let sheetIsPublic = false;
 
-let buttonReCheck = document.getElementById('btn-re-check-link') as HTMLButtonElement;
+// layer selection count
+let layerSelectionCount: number = 0;
+let layerSelectionNames: string[];
+
+// elems
+const buttonReCheck = document.getElementById('btn-re-check-link') as HTMLButtonElement;
+
+
+
+// message --------------------
 
 window.onmessage = async (event) => {
   if (event.data?.pluginMessage?.type) {
@@ -19,7 +29,6 @@ window.onmessage = async (event) => {
                 type: 'image-ready',
                 image: new Uint8Array(data),
                 nodeId: event.data.pluginMessage.nodeId || null,
-                index: event.data.pluginMessage.index || null,
                 isPlaceholder: event.data.pluginMessage.isPlaceholder
               },
             },
@@ -52,6 +61,11 @@ window.onmessage = async (event) => {
       const subtitleElem = document.querySelector('#subtitle') as HTMLElement;
       const buttonSync = document.querySelector('#sync') as HTMLButtonElement;
 
+      layerSelectionNames = event.data.pluginMessage.layerNames;
+      layerSelectionCount = event.data.pluginMessage.layerCount;
+
+      updateTableSelection();
+
       removeClsStartingWith([sectionMessage, countElem, sectionSync], 'bg-');
 
       removeCls(titleElem, ['text-success', 'text-warning', 'text-error']);
@@ -80,11 +94,17 @@ window.onmessage = async (event) => {
         addCls(titleElem, 'text-error');
         removeCls([subtitleElem, countElem], 'hidden');
       }
-      countElem.innerText = event.data.pluginMessage.layers;
+      countElem.innerText = event.data.pluginMessage.layerCount;
       messageElem.innerText = event.data.pluginMessage.message;
-      if (event.data.pluginMessage.message2) {
-        subtitleElem.innerText = event.data.pluginMessage.message2;
+      if (event.data.pluginMessage.description) {
+        subtitleElem.innerText = event.data.pluginMessage.description;
       }
+    }
+
+    if (event.data.pluginMessage.type === 'update-table-selected') {
+      layerSelectionNames = event.data.pluginMessage.layerNames;
+      layerSelectionCount = event.data.pluginMessage.layerCount;
+      updateTableSelection();
     }
 
     if (event.data.pluginMessage.type === 'populate-json-preview') {
@@ -95,81 +115,70 @@ window.onmessage = async (event) => {
       togglePreview();
     }
 
-    if (event.data.pluginMessage.type === 'close-json-preview') {
+    if (event.data.pluginMessage.type === 'close-advance-preview') {
       togglePreview(true);
     }
 
-    if (event.data.pluginMessage.type === 'get-api-data') {
-      const previewSection = document.querySelector('#preview-section') as HTMLElement;
-
-      if (event.data.pluginMessage.isPreview && !previewSection.classList.contains('accordion-collapsed')) {
-        window.parent.postMessage(
-          {
-            pluginMessage: {
-              type: 'close-preview'
-            },
-          },
-          '*'
-        );
-        return;
-      }
-
-      const sectionHowTo = document.getElementById('section-how-to') as HTMLElement;
-      const publishedStatus = document.getElementById('publish-status') as HTMLElement;
-
-      removeCls(publishedStatus, ['text-success', 'text-error']);
-      addCls(publishedStatus, 'hidden');
-
-      const request = new XMLHttpRequest();
-      request.open('GET', event.data.pluginMessage.url);
-      request.responseType = 'text';
-      request.onerror = () => {
-        removeClsStartingWith(sectionHowTo, 'bg-');
-        addCls(sectionHowTo, 'bg-error');
-        addCls(publishedStatus, 'text-error');
-        removeCls(publishedStatus, 'hidden');
-        publishedStatus.innerText = '⛔️ Invalid link or bad request';
-        toggleReCheckButton(false);
-      };
-      request.onload = () => {
-        const jsonParsed = JSON.parse(request.response);
-
-        if (jsonParsed.error) {
-          sheetIsPublic = false;
-          updatePreviewButton(getInputUrlValue());
-          removeClsStartingWith(sectionHowTo, 'bg-');
-          addCls(sectionHowTo, 'bg-error');
-          addCls(publishedStatus, 'text-error');
-          removeCls(publishedStatus, 'hidden');
-          publishedStatus.innerText = '⛔️ Sheet is not Public';
-        } else {
-          sheetIsPublic = true;
-          updatePreviewButton(getInputUrlValue());
-          removeClsStartingWith(sectionHowTo, 'bg-');
-          addCls(sectionHowTo, 'bg-success');
-          addCls(publishedStatus, 'text-success');
-          removeCls(publishedStatus, 'hidden');
-          publishedStatus.innerText = '✅ Sheet is Public';
+    if (event.data.pluginMessage.type === 'get-api-data-sheet') {
+      fetchData(event.data)
+        .then((data) => {
+          const parsedData = JSON.parse(data);
+          const spreadsheetTitle = parsedData.properties.title;
+          const spreadsheetSheetsInfo = parsedData.sheets.map(sheet => {
+            return {
+              title: sheet.properties.title,
+              rowCount: sheet.properties.rowCount,
+              columnCount: sheet.properties.columnCount,
+            }
+          });
+          const spreadsheetData = {
+            properties: spreadsheetTitle,
+            sheets: spreadsheetSheetsInfo
+          };
 
           if (!event.data.pluginMessage.isCheckUrl) {
-            const data = request.response;
+            const inputValue = getInputUrlValue();
+            window.parent.postMessage({ pluginMessage: { type: 'get-data', url: inputValue, isPreview: false, isCheckUrl: false, spreadsheetData }}, '*');
+          }
+        })
+        .catch((error) => {
+          console.log('ERROR:', error);
+        })
+    }
+
+    if (event.data.pluginMessage.type === 'get-api-data-values') {
+      const previewSection = document.querySelector('#preview-section') as HTMLElement;
+      if (event.data.pluginMessage.isPreview && !previewSection.classList.contains('accordion-collapsed')) {
+        window.parent.postMessage({ pluginMessage: { type: 'close-preview' } }, '*');
+        toggleAdvancedMode();
+        return; // prevents further code (required)
+      } else if (event.data.pluginMessage.isPreview && previewSection.classList.contains('accordion-collapsed')) {
+        window.parent.postMessage({ pluginMessage: { type: 'open-preview' } }, '*');
+        toggleAdvancedMode();
+      }
+
+      fetchData(event.data)
+        .then((data) => {
+          if (!event.data.pluginMessage.isCheckUrl) {
+            createTable(JSON.parse(data).values);
+
             window.parent.postMessage(
               {
                 pluginMessage: {
                   type: 'spreadsheet-data',
                   data,
                   isPreview: event.data.pluginMessage.isPreview,
-                  isCheckUrl: event.data.pluginMessage.isCheckUrl
+                  isCheckUrl: event.data.pluginMessage.isCheckUrl,
+                  spreadsheetData: event.data.pluginMessage.spreadsheetData
                 },
               },
               '*'
             );
           }
-        }
-
-        toggleReCheckButton(false);
-      };
-      request.send();
+        })
+        .catch((error) => {
+          console.log('ERROR:', error);
+        })
     }
 
     // console.log('event.data.pluginMessage.type:', event.data.pluginMessage.type);
@@ -186,22 +195,19 @@ window.onmessage = async (event) => {
     // }
   }
   // console.log('MSG:', event.data);
-};
+}
 
 
 
 // listeners --------------------
 
 // listeners: add input url listeners
-document.getElementById('api-url').addEventListener('input', debounce(checkUrlPublic));
-document.getElementById('api-url').addEventListener('paste', debounce(checkUrlPublic));
-document.getElementById('api-url').addEventListener('input', updateInputUrl);
-document.getElementById('api-url').addEventListener('focus', updateInputUrl);
-document.getElementById('api-url').addEventListener('focus', (event) => { (event.target as HTMLInputElement).select(); });
+document.getElementById('api-url').addEventListener('input', () => { debounce(checkUrlPublic); updateInputUrl(); });
+document.getElementById('api-url').addEventListener('paste', () => { debounce(checkUrlPublic); updateInputUrl(); });
+document.getElementById('api-url').addEventListener('focus', (event) => { (event.target as HTMLInputElement).select(); updateInputUrl(); });
 document.getElementById('api-url').addEventListener('blur', updateInputUrl);
-document.getElementById('api-url').addEventListener('paste', updateInputUrl);
 
-// listeners: button sync
+// listeners: sync
 document.getElementById('sync').addEventListener('click', () => {
   const inputValue = getInputUrlValue();
   window.parent.postMessage(
@@ -210,7 +216,7 @@ document.getElementById('sync').addEventListener('click', () => {
   );
 });
 
-// listeners: button preview-data
+// listeners: preview-data
 document.getElementById('preview-data').onclick = () => {
   const inputValue = getInputUrlValue();
   window.parent.postMessage(
@@ -219,17 +225,64 @@ document.getElementById('preview-data').onclick = () => {
   );
 };
 
+// listeners: open more info modal
+document.getElementById('more-info').onclick = () => {
+  const modalInfo = (document.getElementById('more-info-modal') as HTMLElement);
+
+  modalInfo.style.display = 'block';
+  modalInfo.classList.remove('out');
+};
+
+// listeners: close more info modal
+[document.getElementById('close-modal'), document.getElementById('modal-overlay')].forEach(item => {
+  item.addEventListener('click', event => {
+    const modalInfo = (document.getElementById('more-info-modal') as HTMLElement);
+
+    modalInfo.classList.add('out');
+
+    const modalOverlay = modalInfo.querySelector('.modal-overlay');
+    const style = getComputedStyle(modalOverlay, 'animation');
+    const styleAnimationDuration = parseFloat(style.animationDuration);
+    const styleAnimationDurationNumber = styleAnimationDuration * 1000;
+
+    setTimeout(() => {
+      modalInfo.style.display = 'none';
+      modalInfo.classList.remove('out');
+    }, styleAnimationDurationNumber);
+  })
+});
+
+// listeners: copy json to clipboard
 document.getElementById('btn-copy-to-clipboard').onclick = () => {
   const textarea = (document.getElementById('code-to-copy') as HTMLTextAreaElement);
   textarea.select();
   document.execCommand('copy');
 };
 
-buttonReCheck.onclick = (event) => {
+// listeners: re-check link
+buttonReCheck.onclick = () => {
   checkUrlPublic();
 
   toggleReCheckButton(true);
 };
+
+// listeners: add body class when SHIFT key is down
+const body = document.querySelector('body');
+window.addEventListener('keydown', (event) => {
+  if (event.key.toLowerCase() === 'shift') {
+    addCls(body, 'shift-pressed');
+  }
+});
+window.addEventListener('keyup', (event) => {
+  if (event.key.toLowerCase() === 'shift') {
+    removeCls(body, 'shift-pressed');
+  }
+});
+
+// listeners: when mouse enters the plugin window gove it focus
+document.querySelector('.wrapper').addEventListener('mouseenter', () => {
+  window.focus();
+});
 
 
 
@@ -252,7 +305,7 @@ function updateInputUrl() {
   addCls(urlValidStatus, 'hidden');
 
   if (url !== '') {
-    const urlValid = checkUrl(url);
+    const urlValid = checkUrlIsValid(url);
 
     if (urlValid) {
       sectionSheetsUrl.classList.add('bg-success');
@@ -282,9 +335,9 @@ function updateInputUrl() {
 
 
 
-// url --------------------
+// helpers --------------------
 
-function togglePreview(collapse: boolean = false) {
+function togglePreview(collapse: boolean = false): void {
   const previewDataBtn = document.getElementById('preview-data');
   const previewSection = document.querySelector('#preview-section') as HTMLElement;
   previewSection.classList.toggle('accordion-collapsed');
@@ -295,6 +348,12 @@ function togglePreview(collapse: boolean = false) {
   if (!collapse) {
     tooltipListeners();
   }
+}
+
+function toggleAdvancedMode(): void {
+  const sectionHowTo = document.querySelector('#section-how-to') as HTMLElement;
+  sectionHowTo.classList.toggle('accordion-collapsed');
+  sectionHowTo.classList.toggle('accordion-expanded');
 }
 
 function tooltipListeners() {
@@ -329,9 +388,9 @@ function tooltipListeners() {
 // url --------------------
 
 // url: check if url is a google spreadsheet valid url
-function checkUrl(url: string) {
-  var regex = new RegExp(/^(ftp|http|https):\/\/[^ "]+$/);
-  const urlValid = regex.test(url.trim());
+function checkUrlIsValid(url: string): boolean {
+  var validLink = new RegExp(/^(ftp|http|https):\/\/[^ "]+$/);
+  const urlValid = validLink.test(url.trim());
   const urlPrefix = 'https://docs.google.com/spreadsheets';
 
   return urlValid && url.startsWith(urlPrefix);
@@ -343,11 +402,246 @@ function checkUrlPublic() {
 
   updatePreviewButton(url);
 
-  if (checkUrl(url)) {
+  if (checkUrlIsValid(url)) {
     window.parent.postMessage(
       { pluginMessage: { type: 'get-data', url, isPreview: false, isCheckUrl: true } },
       '*'
     );
+  }
+}
+
+
+
+// data --------------------
+
+function fetchData(data: any): Promise<any> {
+  setUrlRequestStatus(RequestType.RESET);
+
+  const dataFetch = new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('GET', data.pluginMessage.url);
+    request.responseType = 'text';
+    request.onerror = () => {
+      setUrlRequestStatus(RequestType.ERROR, RequestMessage.INVALID_LINK);
+      reject(RequestMessage.ERROR_GENERIC);
+    }
+    request.onload = () => {
+      const jsonParsed = JSON.parse(request.response);
+
+      if (jsonParsed) {
+        if (jsonParsed.error) {
+          sheetIsPublic = false;
+          updatePreviewButton(getInputUrlValue());
+          setUrlRequestStatus(RequestType.ERROR, RequestMessage.SHEET_NOT_PUBLIC);
+          reject(RequestMessage.ERROR_GENERIC);
+        } else {
+          sheetIsPublic = true;
+          updatePreviewButton(getInputUrlValue());
+          setUrlRequestStatus(RequestType.SUCCESS, RequestMessage.SHEET_PUBLIC);
+
+          resolve(request.response);
+        }
+      }
+
+      toggleReCheckButton(false);
+    };
+    request.send();
+  });
+
+  return dataFetch;
+}
+
+function setUrlRequestStatus(type: RequestType, message: RequestMessage = null): void {
+  const sectionHowTo = document.getElementById('section-how-to') as HTMLElement;
+  const publishedStatus = document.getElementById('publish-status') as HTMLElement;
+
+  if (type === RequestType.RESET) {
+    removeCls(publishedStatus, ['text-success', 'text-error']);
+    addCls(publishedStatus, 'hidden');
+  }
+
+  if (type === RequestType.ERROR) {
+    removeClsStartingWith(sectionHowTo, 'bg-');
+    addCls(sectionHowTo, 'bg-error');
+    addCls(publishedStatus, 'text-error');
+    removeCls(publishedStatus, 'hidden');
+    publishedStatus.innerText = message;
+    toggleReCheckButton(false);
+  }
+
+  if (type === RequestType.SUCCESS) {
+    removeClsStartingWith(sectionHowTo, 'bg-');
+    addCls(sectionHowTo, 'bg-success');
+    addCls(publishedStatus, 'text-success');
+    removeCls(publishedStatus, 'hidden');
+    publishedStatus.innerText = message;
+  }
+}
+
+function createTable(data: string[][]): void {
+  const table = document.getElementById('data-table') as HTMLTableElement;
+  const layerNamePrefix = '#';
+  const extraActions = (layerName) => `
+    <span class="cell-actions">
+      <div class="button-holder" tooltip="${layerNamePrefix}${layerName}.rand">
+        <button data-type="rand" class="icon-only random"></button>
+      </div>
+      <div class="button-holder" tooltip="${layerNamePrefix}${layerName}.randsave">
+        <button data-type="randsave" class="icon-only random-save"></button>
+      </div>
+    </span>
+  `;
+
+  let tableHTML = '';
+  data.map((elem, index) => {
+    if (index === 0) {
+      tableHTML += `
+        <thead>
+          <tr>
+            <th class="cell-count"></th>
+      `;
+
+      elem.map((th, idx) => tableHTML += `
+        <th>
+          <div class="cell-inner">
+            <div class="cell-name-holder" tooltip="${layerNamePrefix}${th}">
+              <span class="cell-name">${th}</span>
+            </div>
+            ${extraActions(th)}
+          </div>
+        </th>`);
+      tableHTML += '</tr></thead>';
+    } else {
+      tableHTML += `
+        <tbody>
+          <tr>
+            <td class="cell-count">${index}</td>
+      `;
+
+      elem.map((td, idx) => tableHTML += `
+        <td>
+          <div class="cell-inner">
+            <div class="cell-name-holder" tooltip="${layerNamePrefix}${data[0][idx]}.${index}">
+              <span class="cell-name">${td}</span>
+            </div>
+          </div>
+        </td>`);
+      tableHTML += '</tr>';
+
+      if (index === data.length - 1) {
+        tableHTML += '</tbody>';
+      }
+    }
+  });
+  table.innerHTML = tableHTML;
+
+  // add listeners
+  const rows = document.querySelectorAll('tr');
+  const rowsArray = Array.from(rows);
+
+  table.addEventListener('click', (event) => {
+    let target = event.target as HTMLElement;
+    const labelNamePrefix = '#';
+    let labelNameSuffix = '';
+    if (target.tagName.toLowerCase() === 'button') {
+      labelNameSuffix = `.${target.getAttribute('data-type')}`;
+      target = target.closest('th').querySelector('.cell-name');
+    }
+
+    const rowIndex = rowsArray.findIndex(row => row.contains(target));
+    if (rowsArray[rowIndex]) {
+      const columns = Array.from(rowsArray[rowIndex].querySelectorAll('th, td'));
+      const columnIndex = columns.findIndex(column => {
+        const colName = column.closest('th, td').querySelector('.cell-name');
+        const targetName = target.parentElement.closest('th, td').querySelector('.cell-name');
+
+        return colName === targetName;
+      });
+      const columnTite = data[0][columnIndex - 1];
+      let value = '';
+
+      if (rowIndex === 0) {
+        value = `${labelNamePrefix}${columnTite}${labelNameSuffix}`;
+      } else {
+        value = `${labelNamePrefix}${columnTite}.${rowIndex}`;
+      }
+      // console.log(columnIndex, rowIndex, value);
+
+      window.parent.postMessage(
+        { pluginMessage: { type: 'table-elem-click', rowIndex, columnIndex, value, layerSelectionCount, isShift: event.shiftKey } },
+        '*'
+      );
+    }
+  });
+
+  updateTableSelection();
+}
+
+function updateTableSelection(): void {
+  const table = document.getElementById('data-table');
+  const tableInfo = document.getElementById('table-info');
+
+  const tableToggleSelected = (onlyRemove: boolean): void => {
+    const layerNamesArray = layerSelectionNames.map(name => name.split('#').filter(str => str !== '').map(str => `#${str}`));
+    let selectedArrayCount = 0;
+
+    table.querySelectorAll('[tooltip]').forEach(elem => {
+      const cell = elem.closest('th, td');
+      const cellButtons = cell.querySelectorAll('.button-holder');
+      if (cellButtons.length > 0) {
+        cellButtons.forEach(btn => removeCls(btn, 'selected'));
+      }
+
+      if (cell.classList.contains('selected')) {
+        removeCls(cell, 'selected');
+      }
+
+      if (!onlyRemove) {
+        setTimeout(() => {
+          const cellName = elem.getAttribute('tooltip');
+          layerNamesArray.map(name => {
+            if (name.includes(cellName)) {
+              addCls(elem.closest('th, td'), 'selected')
+
+              if (elem.classList.contains('button-holder')) {
+                addCls(elem, 'selected')
+              }
+
+              selectedArrayCount++;
+            }
+          });
+
+          if (selectedArrayCount === 0) {
+            removeCls(table, 'selected-multiple');
+            removeCls(table, 'selected-single');
+          } else if (selectedArrayCount === 1) {
+            removeCls(table, 'selected-multiple');
+            addCls(table, 'selected-single');
+          } else if (selectedArrayCount > 1) {
+            addCls(table, 'selected-multiple');
+            removeCls(table, 'selected-single');
+          }
+        });
+      }
+    });
+  }
+
+  if (layerSelectionCount === 1) {
+    removeCls(tableInfo, 'has-selection');
+    addCls(tableInfo, 'has-selection');
+
+    if (table.children.length > 0) {
+      if (layerSelectionCount === 1) {
+        removeCls(table, 'selected-multiple');
+        addCls(table, 'selected-multiple');
+
+        tableToggleSelected(false);
+      }
+    }
+  } else if (layerSelectionCount === 0 || layerSelectionCount > 1) {
+    removeCls(tableInfo, 'has-selection');
+
+    tableToggleSelected(true);
   }
 }
 
@@ -359,7 +653,7 @@ function checkUrlPublic() {
 function updatePreviewButton(url: string) {
   const buttonPreviewData = document.querySelector('#preview-data') as HTMLButtonElement;
 
-  if (checkUrl(url) && sheetIsPublic) {
+  if (checkUrlIsValid(url) && sheetIsPublic) {
     buttonPreviewData.disabled = false;
   } else {
     buttonPreviewData.disabled = true;
@@ -461,35 +755,3 @@ function removeCls(elem: any | any[], cls: string | string[]): void {
     }
   }
 }
-
-
-
-// slider --------------------
-
-// const slider = document.getElementById('slider');
-// let isDown = false;
-// let startX;
-// let scrollLeft;
-// const dragSpeed = 3;
-
-// slider.addEventListener('mousedown', (e) => {
-//   isDown = true;
-//   slider.classList.add('active');
-//   startX = e.pageX - slider.offsetLeft;
-//   scrollLeft = slider.scrollLeft;
-// });
-// slider.addEventListener('mouseleave', () => {
-//   isDown = false;
-//   slider.classList.remove('active');
-// });
-// slider.addEventListener('mouseup', () => {
-//   isDown = false;
-//   slider.classList.remove('active');
-// });
-// slider.addEventListener('mousemove', (e) => {
-//   if(!isDown) return;
-//   e.preventDefault();
-//   const x = e.pageX - slider.offsetLeft;
-//   const walk = (x - startX) * dragSpeed; // scroll-fast
-//   slider.scrollLeft = scrollLeft - walk;
-// });
