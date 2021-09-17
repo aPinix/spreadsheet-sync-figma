@@ -3,8 +3,8 @@ console.clear();
 // imports --------------------
 import { placeholderImage } from './placeholder';
 import { API_KEY } from './api-key';
-import { ChangeTypes, LayerNameSuffix, SuffixSpecial, TextHasPlaceholders, UrlData, UrlDataType } from './models';
-import { layerNamePrefix, selectDebug } from './variables';
+import { ChangeTypes, LayerNameSuffix, SuffixSpecial, TextHasPlaceholders, UrlData, UrlDataType, WindowSize } from './models';
+import { appWindowBigStartSize, appWindowMinSize, layerNamePrefix, selectDebug } from './variables';
 
 
 
@@ -14,16 +14,6 @@ import { layerNamePrefix, selectDebug } from './variables';
 const lsApiUrl = 'apiUrl';
 
 
-
-// global vars --------------------
-
-// global vars: window size
-let appWindowDefaultWidth = 380;
-let appWindowDefaultHeight = 494;
-let appWindowBigWidth = 750;
-let appWindowBigHeight = 700;
-let appWindowWidth = appWindowDefaultWidth;
-let appWindowHeight = appWindowDefaultHeight;
 
 // set figma plugin on inspector at start
 figma.root.setRelaunchData({
@@ -36,15 +26,23 @@ let placeholderImageFill: any[];
 // variable for random-save type
 let randomSaveNumber: number;
 
+// handle text node fonts as cache
+let fontsCache: any[];
+
 
 
 // init --------------------
 
 // init: create ui
 figma.showUI(__html__, {
-  width: appWindowWidth,
-  height: appWindowHeight,
+  width: appWindowMinSize.w,
+  height: appWindowMinSize.h
 });
+
+// // restore previous size
+// figma.clientStorage.getAsync('size').then(size => {
+//   if (size) figma.ui.resize(size.w, size.h);
+// }).catch(err => {});
 
 // init: starting point
 init();
@@ -72,6 +70,11 @@ figma.on('selectionchange', () => {
 
 // message receive
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === 'window-resize') {
+    figma.ui.resize(msg.size.w, msg.size.h);
+    figma.clientStorage.setAsync('window-size', msg.size).catch(err => {}); // save size
+  }
+
   // if image is ready to be put into the design
   if (msg.type === 'image-ready') {
     const image = msg.image as Uint8Array;
@@ -131,33 +134,38 @@ figma.ui.onmessage = async (msg) => {
       let prettyJson = syntaxHighlight(rowsData);
 
       // add little square color to the json preview
-      const regexColor = /(\"\/\#)(.*)(\")/gi;
+      const regexColor = /(\"\/\#)(.*?)(\")/gi;
       prettyJson = prettyJson.replace(
         regexColor,
         `<span class="icon-color"><span class="color-square" style="background-color: #${'$2'};"></span>"/#${'$2'}"</span>`
       );
 
+      // add little square color to the json preview
+      const regexStrokeWithColor = /(\/([0-9]+)?\|#)(.*)(\")/gi;
+      prettyJson = prettyJson.replace(
+        regexStrokeWithColor,
+        `<span class="icon-color"><span class="color-square" data-text="${'$2'}" style="background-color: #${'$3'};"></span>"${'$1'}${'$3'}"</span>`
+      );
+
       // add little eye (show) icon to the json preview
-      const regexBoolShow = /\"\/Show\"/g;
+      const regexBoolShow = /\"(\/(S|s)how)\"/g;
       prettyJson = prettyJson.replace(
         regexBoolShow,
-        '<span class="icon-visible">"/Show"</span>'
+        (match) => `<span class="icon-visible">${match}</span>`
       );
 
       // add little eye (hide) icon to the json preview
-      const regexBoolHide = /\"\/Hide\"/g;
+      const regexBoolHide = /\"(\/(H|h)ide)\"/g;
       prettyJson = prettyJson.replace(
         regexBoolHide,
-        '<span class="icon-invisible">"/Hide"</span>'
+        (match) => `<span class="icon-invisible">${match}</span>`
       );
 
       // add image links
       const regexImage = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
       prettyJson = prettyJson.replace(
         regexImage,
-        (url) => {
-          return `<a class="preview-link" target="_blank" href="${url}">${url}</a>`;
-        }
+        (url) => `<a class="preview-link" target="_blank" href="${url}">${url}</a>`
       );
 
       figma.ui.postMessage({ type: 'populate-json-preview', json: prettyJson, jsonRaw: rowsData });
@@ -190,13 +198,23 @@ figma.ui.onmessage = async (msg) => {
   }
 
   if (msg.type === 'open-preview') {
-    figma.ui.postMessage({ type: 'open-advance-preview' });
-    figma.ui.resize(appWindowBigWidth, appWindowBigHeight);
+    // restore previous size
+    figma.clientStorage.getAsync('window-size').then((size: WindowSize) => {
+      if (size) {
+        figma.ui.resize(size.w, size.h);
+      } else {
+        figma.ui.resize(appWindowBigStartSize.w, appWindowBigStartSize.h);
+      }
+      figma.ui.postMessage({ type: 'open-advance-preview' });
+    }).catch(err => {});
+
+    // figma.ui.postMessage({ type: 'open-advance-preview' });
+    // figma.ui.resize(appWindowBigWidth, appWindowBigHeight);
   }
 
   if (msg.type === 'close-preview') {
     figma.ui.postMessage({ type: 'close-advance-preview' });
-    figma.ui.resize(appWindowDefaultWidth, appWindowDefaultHeight);
+    figma.ui.resize(appWindowMinSize.w, appWindowMinSize.h);
   }
 };
 
@@ -209,21 +227,43 @@ function figmaPopulateSheetSync(data: any[]): void {
   const selectionCount = figma.currentPage.selection.length;
 
   let countLayersChanged = 0;
+  let rowIndex = 0;
+
+  // reset fonts cache
+  fontsCache = [];
+
+  // all nodes
+  // let nodesArray = [];
 
   // for each selection populate children with values from spreadsheet
   selection.map((nodeMain: any, index: number) => {
     randomSaveNumber = Math.floor(Math.random() * (data.length));
 
+    // if selection > sheet rows reset to start loop
+    if (data[rowIndex] === undefined) {
+      rowIndex = 0;
+    }
+
     if (nodeMain.children) {
+      // nodeMain.findAll((node: any) => {
+      //   if (node.name.startsWith(layerNamePrefix)) {
+      //     nodesArray.push({ node, rowIndex });
+      //   }
+      // });
+
       nodeMain.findAll((node: any) => {
         if (node.name.startsWith(layerNamePrefix)) {
           const nameArray = node.name.split('#').filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
 
           const prepareToChangeLayers = (node: any, name: string) => {
             const layerSuffix: LayerNameSuffix = getLayerNameSuffix(name);
-            const layerValue = getValueFromLayerName(layerSuffix, data, name, index);
+            const layerValue = getValueFromLayerName(layerSuffix, data, name, rowIndex);
 
-            changeLayers(node, layerValue);
+            if (layerValue) {
+              changeLayers(node, layerValue);
+            } else {
+              console.warn('VALUE NOT FOUND FOR NODE:', node);
+            }
           }
 
           if (nameArray.length > 1) {
@@ -239,14 +279,75 @@ function figmaPopulateSheetSync(data: any[]): void {
 
       // if last element notify
       if (index === selection.length - 1) {
+        // notify node changes
+        const msgPrefix = `Sync Complete ✅ -`;
+        const msgSuffix = `based on [ ${selectionCount} ] selection${selectionCount > 0 ? 's' : '' }`;
+        let notification: string;
+        if (countLayersChanged > 0) {
+          notification = `${msgPrefix} [ ${countLayersChanged} ] layer${countLayersChanged > 1 ? 's' : ''} changed ${msgSuffix}`;
+        } else {
+          notification = `${msgPrefix} No changes were made ${msgSuffix}`;
+        }
+
         figma.notify(
-          `Sync Complete ✅ - [${countLayersChanged}] layer${countLayersChanged > 1 ? 's' : ''} changed based on [${selectionCount}] selection${selectionCount > 0 ? 's' : '' }`,
+          notification,
           { timeout: 5000 }
         );
         // figma.closePlugin();
       }
     }
+
+    rowIndex++;
   });
+
+  // // put text nodes to be processed first
+  // const textNodes = [];
+  // const otherNodes = [];
+  // let mergedNodes = [];
+  // nodesArray.map(n => n.node.type === 'TEXT' ? textNodes.push(n) : otherNodes.push(n));
+  // mergedNodes = [...textNodes, ...otherNodes];
+  // // nodesArray.sort((a, b) => a.type === ChangeTypes.TEXT ? -1 : 0);
+
+  // mergedNodes.map((obj: any, rowIndex: number) => {
+  //   const nameArray = obj.node.name.split('#').filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
+
+  //   const prepareToChangeLayers = (node: any, name: string) => {
+  //     const layerSuffix: LayerNameSuffix = getLayerNameSuffix(name);
+  //     console.log('rowIndex:', rowIndex);
+  //     const layerValue = getValueFromLayerName(layerSuffix, data, name, rowIndex);
+
+  //     if (layerValue) {
+  //       changeLayers(node, layerValue);
+  //     } else {
+  //       console.warn('VALUE NOT FOUND FOR NODE:', node);
+  //     }
+  //   }
+
+  //   if (nameArray.length > 1) {
+  //     nameArray.map(layerName => {
+  //       prepareToChangeLayers(obj.node, layerName);
+  //     });
+  //   } else {
+  //     prepareToChangeLayers(obj.node, obj.node.name);
+  //   }
+  //   countLayersChanged++;
+  // });
+
+  // // notify node changes
+  // const msgPrefix = `Sync Complete ✅ -`;
+  // const msgSuffix = `based on [ ${selectionCount} ] selection${selectionCount > 0 ? 's' : '' }`;
+  // let notification: string;
+  // if (countLayersChanged > 0) {
+  //   notification = `${msgPrefix} [ ${countLayersChanged} ] layer${countLayersChanged > 1 ? 's' : ''} changed ${msgSuffix}`;
+  // } else {
+  //   notification = `${msgPrefix} No changes were made ${msgSuffix}`;
+  // }
+
+  // figma.notify(
+  //   notification,
+  //   { timeout: 5000 }
+  // );
+  // // figma.closePlugin();
 }
 
 function getChangeCateoryBasedOnNodeTypeAndValue(type: NodeType, value: string): ChangeTypes {
@@ -271,6 +372,7 @@ function getChangeCateoryBasedOnNodeTypeAndValue(type: NodeType, value: string):
   // is image
   else if (
     value.toLowerCase().match(new RegExp(`^http(s)?://`, 'g')) // starts with 'http://' or 'https://'
+    // regexMatch(value, ChangeTypes.IMAGE, true)                 // starts with 'http://' or 'https://'
   ) { return ChangeTypes.IMAGE }
 
   // is variant
@@ -289,17 +391,47 @@ function getChangeCateoryBasedOnNodeTypeAndValue(type: NodeType, value: string):
   }
 }
 
+// function checkIfFontIsCached(font): boolean {
+//   const match = fontsCache.some(f => JSON.stringify(f) === JSON.stringify(font));
+
+//   if (match) {
+//     return true;
+//   } else {
+//     fontsCache.push(font);
+//     return false;
+//   }
+// }
+
+// async function getFontStyle(fontName: FontName): Promise<any> {
+//   await figma.loadFontAsync(fontName);
+//   resolve();
+// }
+
 async function changeLayers(node: any, value: any): Promise<void> {
-  const type: ChangeTypes = getChangeCateoryBasedOnNodeTypeAndValue(node.type, value);
+  const changeType: ChangeTypes = getChangeCateoryBasedOnNodeTypeAndValue(node.type, value);
   // console.log('type:', type);
   // console.log('node:', node);
   // console.log('name:', node.name);
   // console.log('value:', value);
   // console.log('--------------------');
 
-  if (type) {
+  if (changeType) {
     // change text
-    if (type === ChangeTypes.TEXT) {
+    if (changeType === ChangeTypes.TEXT) {
+      // if text node has multiple mixed text styles
+      if (typeof node.fontName === 'symbol') {
+        return;
+      }
+
+      // APPARENTLY THIS DOESN'T WORK! It has to load all node text fonts everytime so it's slower :(
+      // const fontExists = checkIfFontIsCached(node.fontName);
+      // if (!fontExists) {
+      //   // console.log('NEW_FONT:', node.fontName);
+      //   await figma.loadFontAsync(node.fontName as FontName);
+      //   // getFontStyle(node.fontname).then(() => {});
+      // }
+
+      // have to use this always
       await figma.loadFontAsync(node.fontName as FontName);
 
       // reset text
@@ -310,7 +442,9 @@ async function changeLayers(node: any, value: any): Promise<void> {
         }
       }
 
+      // console.time('has-placeholder');
       const placeholder = stringHasPlaceholdersInsideText(node.characters);
+      // console.timeEnd('has-placeholder');
       let phrase = placeholder.phrase;
       if (placeholder.hasPlaceholders) {
         placeholder.placeholders.map((ph: string) => {
@@ -323,7 +457,7 @@ async function changeLayers(node: any, value: any): Promise<void> {
     }
 
     // change color fill
-    if (type === ChangeTypes.COLOR_FILL) {
+    if (changeType === ChangeTypes.COLOR_FILL) {
       if (node?.fills) {
         const colorHex = getColorHexFromValue(value);
         const colorRgba = convertColoHexToRgba(colorHex);
@@ -345,7 +479,7 @@ async function changeLayers(node: any, value: any): Promise<void> {
     }
 
     // change color stroke
-    if (type === ChangeTypes.COLOR_STROKE) {
+    if (changeType === ChangeTypes.COLOR_STROKE) {
       if (node?.strokes) {
         let strokeWeight = value.match(new RegExp(`^\/(?:[0-9]+)(\|#)`, 'g'));
         if (strokeWeight) strokeWeight = strokeWeight[0].match(new RegExp(`[0-9]+`, 'g'))[0];
@@ -371,7 +505,7 @@ async function changeLayers(node: any, value: any): Promise<void> {
     }
 
     // change variant
-    if (type === ChangeTypes.VARIANT) {
+    if (changeType === ChangeTypes.VARIANT) {
       const variantSet = node?.mainComponent?.parent;
       if (variantSet && variantSet.type === 'COMPONENT_SET') {
         const variant = variantSet.findChild(n => n.name === value)
@@ -380,7 +514,7 @@ async function changeLayers(node: any, value: any): Promise<void> {
     }
 
     // change show/hide
-    if (type === ChangeTypes.SHOW_HIDE) {
+    if (changeType === ChangeTypes.SHOW_HIDE) {
       const formattedValue = value.toLowerCase().replace('/', '');
 
       if (formattedValue === 'show') {
@@ -391,7 +525,7 @@ async function changeLayers(node: any, value: any): Promise<void> {
     }
 
     // change image
-    if (type === ChangeTypes.IMAGE) {
+    if (changeType === ChangeTypes.IMAGE) {
       if (node?.fills) {
         // while fetching image use placeholder
         node.fills = placeholderImageFill;
@@ -410,30 +544,33 @@ async function changeLayers(node: any, value: any): Promise<void> {
 
 function getValueFromLayerName(layerSuffix: LayerNameSuffix, data: any, layerName: string, row: number): string {
   layerName = getLayerNameWithoutPrefixAndSuffix(layerName);
+  let value: string;
+  let positionIndex: number;
 
   if (layerSuffix) {
     if (typeof layerSuffix === 'string' && layerSuffix === SuffixSpecial.RANDOM) {
-      const positionIndex = Math.floor(Math.random() * (data.length));
-      const value = data[positionIndex][layerName];
-      return value;
+      positionIndex = Math.floor(Math.random() * (data.length));
     }
 
     if (typeof layerSuffix === 'string' && layerSuffix === SuffixSpecial.RANDOM_SAVE) {
-      const positionIndex = randomSaveNumber;
-      const value = data[positionIndex][layerName];
-      return value;
+      positionIndex = randomSaveNumber;
     }
 
     if (typeof layerSuffix === 'number') {
-      const positionIndex = layerSuffix > data.length - 1 ? data.length - 1 : layerSuffix - 1;
-      const value = data[positionIndex][layerName];
-      return value;
+      positionIndex = layerSuffix >= data.length - 1 ? data.length - 1 : layerSuffix - 1;
     }
   } else {
-    const positionIndex = row;
-    const value = data[positionIndex][layerName];
-    return value;
+    positionIndex = row;
+    value = layerName;
   }
+
+  if (data[positionIndex][layerName]) {
+    value = data[positionIndex][layerName];
+  } else {
+    value = null;
+  }
+
+  return value;
 }
 
 function getOriginalTextIfInsideInstanceComponent(textNode: TextNode): string {
@@ -614,7 +751,7 @@ function getLayerNameSuffix(name: string): LayerNameSuffix {
     return +stringToNumber;
   }
 
-  return '';
+  return null;
 }
 
 function getLayerNameWithoutSpacesAndSpecialChars(str: string): string {

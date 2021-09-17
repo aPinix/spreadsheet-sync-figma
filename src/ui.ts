@@ -1,5 +1,7 @@
-import { RequestMessage, RequestType } from './models';
+import { ChangeTypes, RequestMessage, RequestType, WindowSize } from './models';
+import { isStringType } from './regex-types';
 import './ui.scss';
+import { appWindowMinSize, appWindowMinSizeAdvancedMode } from './variables';
 
 // sheet is public
 let sheetIsPublic = false;
@@ -8,9 +10,13 @@ let sheetIsPublic = false;
 let layerSelectionCount: number = 0;
 let layerSelectionNames: string[];
 
+// if on advanced mode window
+let isAdvancedMode: boolean = false;
+
 // elems
 const buttonReCheck = document.getElementById('btn-re-check-link') as HTMLButtonElement;
-
+const cornerResize = document.getElementById('corner-resize');
+const btnCopy = document.getElementById('btn-copy-to-clipboard') as HTMLTextAreaElement;
 
 
 // message --------------------
@@ -180,21 +186,7 @@ window.onmessage = async (event) => {
           console.log('ERROR:', error);
         })
     }
-
-    // console.log('event.data.pluginMessage.type:', event.data.pluginMessage.type);
-    // if (event.data.pluginMessage.type === 'get-api-data') {
-    //   if (event.data?.googleLoginData) {
-    //     console.log(event.data.googleLoginData);
-    //   }
-    //   // const data = JSON.parse(event.data);
-    //   // const googleLoginData = data.googleLoginData;
-
-    //   // if (googleLoginData) {
-    //   //   console.log('OUT:', googleLoginData);
-    //   // }
-    // }
   }
-  // console.log('MSG:', event.data);
 }
 
 
@@ -202,10 +194,8 @@ window.onmessage = async (event) => {
 // listeners --------------------
 
 // listeners: add input url listeners
-document.getElementById('api-url').addEventListener('input', () => { debounce(checkUrlPublic); updateInputUrl(); });
-document.getElementById('api-url').addEventListener('paste', () => { debounce(checkUrlPublic); updateInputUrl(); });
+document.getElementById('api-url').addEventListener('input', () => { debounce(checkUrlPublic()); updateInputUrl(); }, false);
 document.getElementById('api-url').addEventListener('focus', (event) => { (event.target as HTMLInputElement).select(); updateInputUrl(); });
-document.getElementById('api-url').addEventListener('blur', updateInputUrl);
 
 // listeners: sync
 document.getElementById('sync').addEventListener('click', () => {
@@ -253,10 +243,16 @@ document.getElementById('more-info').onclick = () => {
 });
 
 // listeners: copy json to clipboard
-document.getElementById('btn-copy-to-clipboard').onclick = () => {
-  const textarea = (document.getElementById('code-to-copy') as HTMLTextAreaElement);
+btnCopy.onclick = (event) => {
+  const textarea = document.getElementById('code-to-copy') as HTMLTextAreaElement;
+
   textarea.select();
   document.execCommand('copy');
+
+  addCls(btnCopy, 'copied');
+  setTimeout(() => {
+    removeCls(btnCopy, 'copied');
+  }, 1500);
 };
 
 // listeners: re-check link
@@ -264,6 +260,23 @@ buttonReCheck.onclick = () => {
   checkUrlPublic();
 
   toggleReCheckButton(true);
+};
+
+// listeners: resize window (only when on advanced mode)
+function resizeWindow(event) {
+  const size: WindowSize = {
+    w: Math.max(isAdvancedMode ? appWindowMinSizeAdvancedMode.w : appWindowMinSize.w, Math.floor(event.clientX + 5)),
+    h: Math.max(isAdvancedMode ? appWindowMinSizeAdvancedMode.h : appWindowMinSize.h, Math.floor(event.clientY + 5))
+  };
+  parent.postMessage( { pluginMessage: { type: 'window-resize', size: size }}, '*');
+}
+cornerResize.onpointerdown = (event) => {
+  cornerResize.onpointermove = resizeWindow;
+  cornerResize.setPointerCapture(event.pointerId);
+};
+cornerResize.onpointerup = (event) => {
+  cornerResize.onpointermove = null;
+  cornerResize.releasePointerCapture(event.pointerId);
 };
 
 // listeners: add body class when SHIFT key is down
@@ -346,21 +359,30 @@ function togglePreview(collapse: boolean = false): void {
 
   // if is opened add tooltip listeners to images
   if (!collapse) {
-    tooltipListeners();
+    imageTooltipListeners('code-preview');
   }
 }
 
 function toggleAdvancedMode(): void {
   const sectionHowTo = document.querySelector('#section-how-to') as HTMLElement;
+  isAdvancedMode = !isAdvancedMode;
+
+  cornerResize.classList.toggle('hidden');
   sectionHowTo.classList.toggle('accordion-collapsed');
   sectionHowTo.classList.toggle('accordion-expanded');
 }
 
-function tooltipListeners() {
-  const pre = document.getElementById('code-preview') as HTMLPreElement;
+function imageTooltipListeners(parentElem: HTMLElement | string): void {
+  let elem: HTMLElement;
 
-  if (pre) {
-    const imageLinks = pre.querySelectorAll('.preview-link');
+  if (typeof parentElem === 'string') {
+    elem = document.getElementById(parentElem) as HTMLElement;
+  } else {
+    elem = parentElem;
+  }
+
+  if (elem) {
+    const imageLinks = elem.querySelectorAll('.preview-link');
     const imageTooltip = document.getElementById('img-tooltip') as HTMLElement;
 
     Array.from(imageLinks).map(link => {
@@ -407,6 +429,8 @@ function checkUrlPublic() {
       { pluginMessage: { type: 'get-data', url, isPreview: false, isCheckUrl: true } },
       '*'
     );
+  } else {
+    setUrlRequestStatus(RequestType.RESET);
   }
 }
 
@@ -451,16 +475,17 @@ function fetchData(data: any): Promise<any> {
   return dataFetch;
 }
 
-function setUrlRequestStatus(type: RequestType, message: RequestMessage = null): void {
+function setUrlRequestStatus(requestType: RequestType, message: RequestMessage = null): void {
   const sectionHowTo = document.getElementById('section-how-to') as HTMLElement;
   const publishedStatus = document.getElementById('publish-status') as HTMLElement;
 
-  if (type === RequestType.RESET) {
+  if (requestType === RequestType.RESET) {
+    removeClsStartingWith(sectionHowTo, 'bg-');
     removeCls(publishedStatus, ['text-success', 'text-error']);
     addCls(publishedStatus, 'hidden');
   }
 
-  if (type === RequestType.ERROR) {
+  if (requestType === RequestType.ERROR) {
     removeClsStartingWith(sectionHowTo, 'bg-');
     addCls(sectionHowTo, 'bg-error');
     addCls(publishedStatus, 'text-error');
@@ -469,7 +494,7 @@ function setUrlRequestStatus(type: RequestType, message: RequestMessage = null):
     toggleReCheckButton(false);
   }
 
-  if (type === RequestType.SUCCESS) {
+  if (requestType === RequestType.SUCCESS) {
     removeClsStartingWith(sectionHowTo, 'bg-');
     addCls(sectionHowTo, 'bg-success');
     addCls(publishedStatus, 'text-success');
@@ -522,7 +547,7 @@ function createTable(data: string[][]): void {
         <td>
           <div class="cell-inner">
             <div class="cell-name-holder" tooltip="${layerNamePrefix}${data[0][idx]}.${index}">
-              <span class="cell-name">${td}</span>
+              <span class="cell-name">${isStringImage(td) ? `<a class="preview-link" target="_blank" href="${td}">${td}</a>` : td}</span>
             </div>
           </div>
         </td>`);
@@ -534,6 +559,9 @@ function createTable(data: string[][]): void {
     }
   });
   table.innerHTML = tableHTML;
+
+  // create tooltip for cells with images
+  imageTooltipListeners(table);
 
   // add listeners
   const rows = document.querySelectorAll('tr');
@@ -672,9 +700,8 @@ function toggleReCheckButton(check: boolean): void {
 
 
 
-// methods --------------------
+// utils --------------------
 
-// methods: debounce
 function debounce(func, wait = 1000, immediate = false) {
   var timeout;
   return function() {
@@ -690,9 +717,9 @@ function debounce(func, wait = 1000, immediate = false) {
   };
 }
 
-
-
-// utils --------------------
+function isStringImage(str: string): boolean {
+  return str.toLowerCase().match(new RegExp(`^http(s)?://`, 'g')) ? true : false;
+}
 
 function removeClsStartingWith(elem: any | any[], strCls: string = 'bg-'): void {
   if (Array.isArray(elem)) {
@@ -711,6 +738,10 @@ function removeClsStartingWith(elem: any | any[], strCls: string = 'bg-'): void 
     });
   }
 }
+
+
+
+// class --------------------
 
 function addCls(elem: any | any[], cls: string | string[]): void {
   if (Array.isArray(elem)) {

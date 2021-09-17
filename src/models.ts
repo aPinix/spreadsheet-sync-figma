@@ -1,6 +1,6 @@
 // types --------------------
 
-export type LayerNameSuffix = string | number;
+export type LayerNameSuffix = string | number | null;
 
 
 
@@ -51,4 +51,9 @@ export interface TextHasPlaceholders {
   hasPlaceholders: boolean;
   placeholders: any[];
   phrase: string;
+}
+
+export interface WindowSize {
+  w: number;
+  h: number;
 }

@@ -1,6 +1,7 @@
 // colors --------------------
 
 $color-text: #333;
+$color-icon: #A1AFBF;
 
 $color-gray-medium: #C0CCDA;
 
@@ -72,6 +73,17 @@ body {
 
 p {
   margin: 0;
+}
+
+
+
+// wrapper --------------------
+
+.wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 
@@ -303,14 +315,25 @@ label {
 
 .btn-re-check-link,
 .btn-copy-to-clipboard {
-  margin-left: 10px;
+  margin-left: 6px;
+  margin-bottom: 0;
+  color: $color-icon;
   cursor: pointer;
+  transition: all 0s ease-in-out !important;
+
+  &:hover { color: $color-brand; }
+  &:active { color: darken($color-brand, 10%); }
 
   img {
     width: 12px;
     height: 12px;
     display: inline-block;
     object-fit: contain;
+  }
+
+  svg {
+    width: 12px;
+    height: 12px;
   }
 }
 
@@ -319,6 +342,16 @@ label {
 // tabs --------------------
 
 .tabs {
+  $tab-content-padding: 20px;
+  $tab-content-min-height: 200px; // 546px
+  height: 100%;
+
+  .tab-content {
+    height: calc(100% - #{$tab-content-padding * 2});
+    display: flex;
+    flex-direction: column;
+  }
+
   .tab-content-spreadsheet {
     &:hover {
       .table-info {
@@ -328,7 +361,7 @@ label {
 
     .tab-content-inner {
       width: 100%;
-      height: 346px !important;
+      flex: 1 0 $tab-content-min-height !important;
       position: relative;
       border-radius: $border-radius-md;
       background-color: $color-tab-spreadsheet;
@@ -338,7 +371,7 @@ label {
 
   .tab-content-json {
     pre {
-      height: 346px !important;
+      flex: 1 0 $tab-content-min-height !important;
     }
   }
 
@@ -360,7 +393,7 @@ label {
   .tab ~ .tab-content { display: none; }
 
   .tab-preadsheet:checked ~ .tab-content-spreadsheet,
-  .tab-json:checked ~ .tab-content-json { display: block; }
+  .tab-json:checked ~ .tab-content-json { display: flex; }
 
   .tab + label {
     height: 40px;
@@ -377,7 +410,7 @@ label {
   }
 
   .tab ~ .tab-content {
-    padding: 20px;
+    padding: $tab-content-padding;
     border-top: 1px solid $color-separator;
   }
 }
@@ -642,6 +675,7 @@ table {
     }
 
     .cell-inner {
+      width: 100%;
       height: 100%;
       display: flex;
       align-items: center;
@@ -657,6 +691,7 @@ table {
 
     .cell-name-holder {
       width: 100%;
+      max-width: calc(100% - 43px);
       margin-right: auto;
     }
 
@@ -672,6 +707,11 @@ table {
       text-overflow: ellipsis;
       user-select: none;
       margin-right: auto;
+
+      a {
+        color: $color-figma;
+        text-decoration: underline;
+      }
     }
 
     .cell-actions {
@@ -777,6 +817,10 @@ table {
   }
 }
 
+.preview-section {
+  flex: 1;
+}
+
 
 
 // modal --------------------
@@ -834,26 +878,6 @@ table {
       height: 80px;
     }
   }
-}
-
-@keyframes scaleUp {
-  0% { transform: scale(.8) translateX(-50%) translateY(50%); opacity: 0; }
-  100% { transform: scale(1) translateX(-50%) translateY(-50%); opacity: 1; }
-}
-
-@keyframes scaleDown {
-  0% { transform: scale(1) translateX(-50%) translateY(-50%); opacity: 1; }
-  100% { transform: scale(.8) translateX(-50%) translateY(50%); opacity: 0; }
-}
-
-@keyframes fadeIn {
-  0% { background: rgba(#333, .0); backdrop-filter: blur(0px); }
-  100% { background: rgba(#333, .5); backdrop-filter: blur(5px); }
-}
-
-@keyframes fadeOut {
-  0% { background: rgba(#333, .5); backdrop-filter: blur(5px); }
-  100% { background: rgba(#333, .0); backdrop-filter: blur(0px); }
 }
 
 
@@ -933,7 +957,16 @@ table {
 // tooltip --------------------
 
 [tooltip] {
-  $tooltip-color: #333;
+  --tooltip-color: #333;
+
+  &.copied {
+    --tooltip-color: #{$color-brand};
+
+    &:after {
+      content: 'Copied';
+    }
+  }
+
   position: relative;
 
   &:before,
@@ -956,7 +989,7 @@ table {
     bottom: 100%;
     border: 5px solid transparent;
     border-bottom-width: 0;
-    border-top-color: $tooltip-color;
+    border-top-color: var(--tooltip-color);
     z-index: 1001;
   }
 
@@ -975,7 +1008,7 @@ table {
     padding: 4px 6px;
     border-radius: $border-radius-sm;
     box-shadow: $shadow-lg;
-    background: $tooltip-color;
+    background: var(--tooltip-color);
     color: white;
     z-index: 1000;
   }
@@ -989,8 +1022,19 @@ table {
   }
 }
 
-@keyframes tooltip {
-  to { opacity: .9; transform: translate(-50%, 0); }
+
+
+// image popup --------------------
+
+.corner-resize {
+  position: fixed;
+  right: 1px;
+  bottom: 2px;
+  cursor: nwse-resize;
+
+  &.hidden {
+    display: none;
+  }
 }
 
 
@@ -1259,4 +1303,24 @@ textarea.code-to-copy {
 @keyframes rotate {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+@keyframes scaleUp {
+  0% { transform: scale(.8) translateX(-50%) translateY(50%); opacity: 0; }
+  100% { transform: scale(1) translateX(-50%) translateY(-50%); opacity: 1; }
+}
+
+@keyframes scaleDown {
+  0% { transform: scale(1) translateX(-50%) translateY(-50%); opacity: 1; }
+  100% { transform: scale(.8) translateX(-50%) translateY(50%); opacity: 0; }
+}
+
+@keyframes fadeIn {
+  0% { background: rgba(#333, .0); backdrop-filter: blur(0px); }
+  100% { background: rgba(#333, .5); backdrop-filter: blur(5px); }
+}
+
+@keyframes fadeOut {
+  0% { background: rgba(#333, .5); backdrop-filter: blur(5px); }
+  100% { background: rgba(#333, .0); backdrop-filter: blur(0px); }
 }
