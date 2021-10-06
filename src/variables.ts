@@ -2,7 +2,10 @@
 
 import { WindowSize } from './models';
 
-export const selectDebug: boolean = false;
+// debug
+export const debugSelectedNodes: boolean = false;
+export const debugSteps: boolean = false;
+export const debugTime: boolean = false;
 
 export const layerNamePrefix: string = '#';
 

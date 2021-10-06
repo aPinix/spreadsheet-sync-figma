@@ -3,8 +3,11 @@ console.clear();
 // imports --------------------
 import { placeholderImage } from './placeholder';
 import { API_KEY } from './api-key';
-import { ChangeTypes, LayerNameSuffix, SuffixSpecial, TextHasPlaceholders, UrlData, UrlDataType, WindowSize } from './models';
-import { appWindowBigStartSize, appWindowMinSize, layerNamePrefix, selectDebug } from './variables';
+import { ChangeTypes, DataProcess, layerChangesInfoTotal, LayerNameSuffix, LoggerType, NodeRowRand, OutputNodeError, OutputVars, SelectedNodesInfo, SelectedNode, SpreadsheetData, SpreadsheetSheetsData, SuffixSpecial, TextHasPlaceholders, UrlData, UrlDataType, WindowSize, SelectedNodeType } from './models';
+import { appWindowBigStartSize, appWindowMinSize, layerNamePrefix, debugSelectedNodes } from './variables';
+import { logger, loggerGetTime, loggerTimeStamp } from './logger';
+import { formatDataFillEmpty, formatMsToTime, showLoadingNotification } from './functions';
+import { loadFontsAsync } from './load-fonts-async';
 
 
 
@@ -21,13 +24,25 @@ figma.root.setRelaunchData({
 });
 
 // placeholder image
-let placeholderImageFill: any[];
+let placeholderImageFill: ImagePaint[];
 
-// variable for random-save type
-let randomSaveNumber: number;
+// // loading notification
+// let loadingNotification: () => void;
 
-// handle text node fonts as cache
-let fontsCache: any[];
+// node error output
+let layerNodeErrors: OutputNodeError[];
+
+let selectedNodesInfo: SelectedNodesInfo;
+
+let layerProcessedCount: number;
+let outputVars: OutputVars = {
+  totalNodes: 0,
+  selectionCount: 0,
+  nodeNumber: 0,
+  layersChangeNumber: 0,
+};
+
+let dateNowErrorProcess: Date;
 
 
 
@@ -38,11 +53,6 @@ figma.showUI(__html__, {
   width: appWindowMinSize.w,
   height: appWindowMinSize.h
 });
-
-// // restore previous size
-// figma.clientStorage.getAsync('size').then(size => {
-//   if (size) figma.ui.resize(size.w, size.h);
-// }).catch(err => {});
 
 // init: starting point
 init();
@@ -57,6 +67,8 @@ function init() {
   } else { figma.ui.postMessage({ type: 'set-input-url', value: '' }); }
 
   generateImagePlaceholder();
+
+  figma.ui.postMessage({ type: 'init' });
 }
 
 // figma.on('currentpagechange', () => {
@@ -68,23 +80,35 @@ figma.on('selectionchange', () => {
   checkForUserSelections();
 });
 
+figma.on('close', () => {
+  // if (loadingNotification) {
+  //   loadingNotification();
+  // }
+});
+
 // message receive
 figma.ui.onmessage = async (msg) => {
   if (msg.type === 'window-resize') {
     figma.ui.resize(msg.size.w, msg.size.h);
-    figma.clientStorage.setAsync('window-size', msg.size).catch(err => {}); // save size
+    // save size
+    figma.clientStorage.setAsync('window-size', msg.size)
+      .catch(error => {
+        console.error('ERROR:', error);
+      });
   }
 
   // if image is ready to be put into the design
   if (msg.type === 'image-ready') {
-    const image = msg.image as Uint8Array;
-    const imageHash = figma.createImage(new Uint8Array(image)).hash;
+    const image: Uint8Array = msg.image;
+    const imageHash: string = figma.createImage(new Uint8Array(image)).hash;
 
-    if (!msg.isPlaceholder) {
-      const nodeFills = figma.getNodeById(msg.nodeId);
-      nodeFills['fills'] = [
-        { type: 'IMAGE', scaleMode: 'FILL', imageHash },
-      ];
+    if (!msg.isPlaceholder && msg.nodeId) {
+      const nodeFills: any = figma.getNodeById(msg.nodeId);
+      if (nodeFills?.fills) {
+        nodeFills.fills = [
+          { type: 'IMAGE', scaleMode: 'FILL', imageHash },
+        ];
+      }
     } else {
       placeholderImageFill = [
         { type: 'IMAGE', scaleMode: 'FILL', imageHash },
@@ -99,6 +123,7 @@ figma.ui.onmessage = async (msg) => {
 
   // get data from url
   if (msg.type === 'get-data') {
+    logger(LoggerType.CODE, 'get-data');
     let urlData: UrlData;
     let msgType: string;
 
@@ -106,7 +131,7 @@ figma.ui.onmessage = async (msg) => {
       urlData = getSpreadsheetData(msg.url, UrlDataType.SHEET);
       msgType = 'get-api-data-sheet';
     } else {
-      urlData = getSpreadsheetData(msg.url, UrlDataType.VALUES);
+      urlData = getSpreadsheetData(msg.url, UrlDataType.VALUES, msg.spreadsheetData);
       msgType = 'get-api-data-values';
     }
 
@@ -116,104 +141,136 @@ figma.ui.onmessage = async (msg) => {
       dataType: urlData.type,
       isPreview: msg.isPreview,
       isCheckUrl: msg.isCheckUrl,
-      spreadsheetData: msg.spreadsheetData || null,
+      spreadsheetData: msg.spreadsheetData,
     });
   }
 
   // parse spreadsheet data and process layers
   if (msg.type === 'spreadsheet-data') {
     const data = JSON.parse(msg.data);
-    // console.log('data:', data);
-    // const authorEmail = data.feed.author[0].email.$t;
-    // const authorName = data.feed.author[0].name.$t;
-    // const dateUpdated = data.feed.updated.$t; // '2021-04-20T16:56:11.878Z'
-    // const sheetTitle = data.feed.title.$t; //  'Sheet1'
-    const rowsData: any[] = spreadsheetDataToJson(data.values);
+    let tableValues: SpreadsheetSheetsData;
+
+    if (data?.values) { // spreadsheet with only one tab (sheet)
+      tableValues = [data.values];
+    } else if (data?.valueRanges) { // spreadsheet with multiple tabs (sheets)
+      tableValues = data.valueRanges.map(sheet => sheet.values);
+    }
+
+    const dataProcessArray: DataProcess[] = [];
+    tableValues = formatDataFillEmpty(tableValues);
+
+    tableValues.map(sheet => {
+      const rowsData: SpreadsheetSheetsData = spreadsheetDataToJson(sheet);
+
+      if (msg.isPreview) {
+        let prettyJson = syntaxHighlight(rowsData);
+
+        // add little square color to the json preview
+        const regexColor = /(?:\")(\/#([0-9a-fA-F]{3,8}))(?:\")/g;
+        prettyJson = prettyJson.replace(
+          regexColor,
+          `<span class="icon-color"><span class="color-square" style="background-color: #${'$2'};"></span><span class="color-square-after">"${'$1'}"</span></span>`
+        );
+
+        // add little square color to the json preview
+        const regexStrokeWithColor = /(?:\")((?:\/|)([0-9]+?|)(\|)#([0-9a-fA-F]{3,8}))(?:\")/g;
+        prettyJson = prettyJson.replace(
+          regexStrokeWithColor,
+          `<span class="icon-color"><span class="color-square" data-stroke-width="${'$1'}" style="background-color: #${'$2'};"></span><span class="color-square-after">"${'$1'}"</span></span>`
+        );
+
+        // add little eye (show) icon to the json preview
+        const regexBoolShow = /\"(\/(S|s)how)\"/g;
+        prettyJson = prettyJson.replace(
+          regexBoolShow,
+          (match) => `<span class="icon-visible">${match}</span>`
+        );
+
+        // add little eye (hide) icon to the json preview
+        const regexBoolHide = /\"(\/(H|h)ide)\"/g;
+        prettyJson = prettyJson.replace(
+          regexBoolHide,
+          (match) => `<span class="icon-invisible">${match}</span>`
+        );
+
+        // add image links
+        const regexImage = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+        prettyJson = prettyJson.replace(
+          regexImage,
+          (url) => `<a class="preview-link" target="_blank" href="${url}" data-image="${url}">${url}</a>`
+        );
+
+        dataProcessArray.push({
+          json: prettyJson,
+          data: rowsData
+        });
+      } else {
+        dataProcessArray.push({
+          json: null,
+          data: rowsData
+        });
+      }
+    });
 
     if (msg.isPreview) {
-      let prettyJson = syntaxHighlight(rowsData);
-
-      // add little square color to the json preview
-      const regexColor = /(\"\/\#)(.*?)(\")/gi;
-      prettyJson = prettyJson.replace(
-        regexColor,
-        `<span class="icon-color"><span class="color-square" style="background-color: #${'$2'};"></span>"/#${'$2'}"</span>`
-      );
-
-      // add little square color to the json preview
-      const regexStrokeWithColor = /(\/([0-9]+)?\|#)(.*)(\")/gi;
-      prettyJson = prettyJson.replace(
-        regexStrokeWithColor,
-        `<span class="icon-color"><span class="color-square" data-text="${'$2'}" style="background-color: #${'$3'};"></span>"${'$1'}${'$3'}"</span>`
-      );
-
-      // add little eye (show) icon to the json preview
-      const regexBoolShow = /\"(\/(S|s)how)\"/g;
-      prettyJson = prettyJson.replace(
-        regexBoolShow,
-        (match) => `<span class="icon-visible">${match}</span>`
-      );
-
-      // add little eye (hide) icon to the json preview
-      const regexBoolHide = /\"(\/(H|h)ide)\"/g;
-      prettyJson = prettyJson.replace(
-        regexBoolHide,
-        (match) => `<span class="icon-invisible">${match}</span>`
-      );
-
-      // add image links
-      const regexImage = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
-      prettyJson = prettyJson.replace(
-        regexImage,
-        (url) => `<a class="preview-link" target="_blank" href="${url}">${url}</a>`
-      );
-
-      figma.ui.postMessage({ type: 'populate-json-preview', json: prettyJson, jsonRaw: rowsData });
+      figma.ui.postMessage({ type: 'populate-json-preview', data: dataProcessArray });
     } else {
-      figmaPopulateSheetSync(rowsData);
+      figmaPopulateSheetSync(dataProcessArray);
     }
   }
 
   if (msg.type === 'table-elem-click') {
     const selection = figma.currentPage.selection;
-    const countSelection = figma.currentPage.selection.length;
-    let singleNamingLayer;
+    const selectionCount = figma.currentPage.selection.length;
+    let namingLayerArray: string[] = [];
 
-    if (countSelection === 1) {
-      selection.forEach(selectedNode => {
-        if (!msg.isShift) {
-          selectedNode.name = msg.value;
-          singleNamingLayer = msg.value;
-        } else {
-          const layerName = changeLayerNameMultiple(selectedNode.name, msg.value);
-          selectedNode.name = layerName;
-          singleNamingLayer = layerName;
-        }
-      });
-    } else {
-      // error: only 1 layer selected
+    const renameSingle = (node) => {
+      node.name = msg.value;
+      namingLayerArray.push(msg.value);
     }
 
-    figma.ui.postMessage({ type: 'update-table-selected', layerNames: [singleNamingLayer], layerCount: countSelection });
+    const renameMultiple = (node, newName = node.name) => {
+      const layerName = changeLayerNameMultiple(newName, msg.value);
+      node.name = layerName;
+      namingLayerArray.push(layerName);
+    }
+
+    const renameLayer = (node) => {
+      if (!msg.isShift) {
+        renameSingle(node);
+      } else {
+        if (node.name.includes(layerNamePrefix)) {
+          if (node.name.startsWith(layerNamePrefix)) {
+            renameMultiple(node);
+          } else {
+            const newName = `${layerNamePrefix}${node.name.split(layerNamePrefix).splice(1).join(layerNamePrefix)}`;
+            renameMultiple(node, newName);
+          }
+        } else {
+          renameSingle(node);
+        }
+      }
+    }
+
+    selection.forEach(node => {
+      renameLayer(node);
+    });
+
+    figma.ui.postMessage({ type: 'update-table-selected', layerNames: namingLayerArray, layerCount: selectionCount });
   }
 
   if (msg.type === 'open-preview') {
     // restore previous size
-    figma.clientStorage.getAsync('window-size').then((size: WindowSize) => {
-      if (size) {
-        figma.ui.resize(size.w, size.h);
-      } else {
-        figma.ui.resize(appWindowBigStartSize.w, appWindowBigStartSize.h);
-      }
-      figma.ui.postMessage({ type: 'open-advance-preview' });
-    }).catch(err => {});
-
-    // figma.ui.postMessage({ type: 'open-advance-preview' });
-    // figma.ui.resize(appWindowBigWidth, appWindowBigHeight);
+    figma.clientStorage.getAsync('window-size')
+      .then((size: WindowSize) => {
+        figma.ui.resize(size ? size.w : appWindowBigStartSize.w, size ? size.h : appWindowBigStartSize.h);
+      })
+      .catch(error => {
+        console.error('ERROR:', error);
+      });
   }
 
   if (msg.type === 'close-preview') {
-    figma.ui.postMessage({ type: 'close-advance-preview' });
     figma.ui.resize(appWindowMinSize.w, appWindowMinSize.h);
   }
 };
@@ -222,132 +279,109 @@ figma.ui.onmessage = async (msg) => {
 
 // functions --------------------
 
-function figmaPopulateSheetSync(data: any[]): void {
-  const selection = figma.currentPage.selection;
+function figmaPopulateSheetSync(data: DataProcess[]): void {
+  loggerTimeStamp('SYNC START');
+  // loadingNotification = showLoadingNotification(`Running...`);
+
+  const dataArray = data.map(sheet => sheet.data);
+
+  const selection = figma.currentPage.selection.slice();
   const selectionCount = figma.currentPage.selection.length;
 
-  let countLayersChanged = 0;
-  let rowIndex = 0;
+  // start index for each sheet
+  let rowIndex: number[] = [];
+  dataArray.map(sheet => rowIndex.push(0));
 
-  // reset fonts cache
-  fontsCache = [];
+  // reset layer node errors
+  layerNodeErrors = [];
+
+  layerProcessedCount = 0;
+
+  // set output vars
+  outputVars = {...outputVars, ...{
+    totalNodes: 0,
+    selectionCount,
+    nodeNumber: 0,
+  }};
 
   // all nodes
-  // let nodesArray = [];
+  const nodesArray: NodeRowRand[] = [];
 
   // for each selection populate children with values from spreadsheet
-  selection.map((nodeMain: any, index: number) => {
-    randomSaveNumber = Math.floor(Math.random() * (data.length));
+  selection.map((nodeSelected: any) => {
+    // reset randomSaveNumber for each sheet
+    const randomSaveNumber: number[] = [];
 
-    // if selection > sheet rows reset to start loop
-    if (data[rowIndex] === undefined) {
-      rowIndex = 0;
-    }
+    data.map((sheet, index) => {
+      // add a random save row for each sheet
+      randomSaveNumber.push(Math.floor(Math.random() * (sheet.data.length)))
 
-    if (nodeMain.children) {
-      // nodeMain.findAll((node: any) => {
-      //   if (node.name.startsWith(layerNamePrefix)) {
-      //     nodesArray.push({ node, rowIndex });
-      //   }
-      // });
+      // if selection > sheet rows reset to start loop
+      if (rowIndex[index] === sheet.data.length) rowIndex[index] = 0;
+    });
 
-      nodeMain.findAll((node: any) => {
+    if (nodeSelected.children) {
+      nodeSelected.findAll((node: SceneNode) => {
         if (node.name.startsWith(layerNamePrefix)) {
-          const nameArray = node.name.split('#').filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
-
-          const prepareToChangeLayers = (node: any, name: string) => {
-            const layerSuffix: LayerNameSuffix = getLayerNameSuffix(name);
-            const layerValue = getValueFromLayerName(layerSuffix, data, name, rowIndex);
-
-            if (layerValue) {
-              changeLayers(node, layerValue);
-            } else {
-              console.warn('VALUE NOT FOUND FOR NODE:', node);
-            }
-          }
-
-          if (nameArray.length > 1) {
-            nameArray.map(layerName => {
-              prepareToChangeLayers(node, layerName);
-            });
-          } else {
-            prepareToChangeLayers(node, node.name);
-          }
-          countLayersChanged++;
+          nodesArray.push({ node, rowIndex, randomSaveNumber });
         }
       });
+    }
 
-      // if last element notify
-      if (index === selection.length - 1) {
-        // notify node changes
-        const msgPrefix = `Sync Complete ✅ -`;
-        const msgSuffix = `based on [ ${selectionCount} ] selection${selectionCount > 0 ? 's' : '' }`;
-        let notification: string;
-        if (countLayersChanged > 0) {
-          notification = `${msgPrefix} [ ${countLayersChanged} ] layer${countLayersChanged > 1 ? 's' : ''} changed ${msgSuffix}`;
-        } else {
-          notification = `${msgPrefix} No changes were made ${msgSuffix}`;
-        }
+    // increment row number for each sheet
+    rowIndex = rowIndex.map((_, idx) => rowIndex[idx] + 1);
+  });
 
-        figma.notify(
-          notification,
-          { timeout: 5000 }
-        );
-        // figma.closePlugin();
+  // figma.ui.postMessage({ type: 'start-loading', totalNodes: nodesArray.length });
+
+  // // get text nodes to process load fonts
+  // const textNodes = nodesArray.map(n => n.node.type === 'TEXT' ? n.node: null).filter(n => n !== null);
+
+  // // load and cache fonts for each text node
+  // const t1 = loggerGetTime();
+  // await loadFontsAsync(textNodes);
+  // const t2 = loggerGetTime();
+  // logger(LoggerType.CODE, `Fonts took ${formatMsToTime(t2 - t1)} to load for all TextNodes!`, true);
+
+  // nodesArray.map((obj: any) => {
+  //   const nameArray = obj.node.name.split(layerNamePrefix).filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
+  //   outputVars.layersChangeNumber = outputVars.layersChangeNumber + nameArray.length;
+  // });
+
+  outputVars.totalNodes = nodesArray.length;
+
+  nodesArray.map((obj: any, index: number) => {
+    const nameArray = obj.node.name.split(layerNamePrefix).filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
+    outputVars.nodeNumber = index + 1;
+
+    const prepareToChangeLayers = (node: any, name: string) => {
+      const layerSuffix: LayerNameSuffix = getLayerNameSuffix(name);
+      const layerValue = getValueFromLayerName(data, name, layerSuffix, obj.rowIndex, obj.randomSaveNumber);
+
+      if (layerValue) {
+        changeLayers(node, layerValue, outputVars);
+      } else {
+        layerProcessedCount++;
+        checkIfFinished(outputVars, false);
+        nodeProcessedError(node, layerValue, `No column found with name`);
+        console.warn('VALUE NOT FOUND FOR NODE:', node);
       }
     }
 
-    rowIndex++;
+    if (nameArray.length > 1) {
+      nameArray.map(layerName => {
+        prepareToChangeLayers(obj.node, layerName);
+      });
+    } else {
+      prepareToChangeLayers(obj.node, obj.node.name);
+    }
   });
+}
 
-  // // put text nodes to be processed first
-  // const textNodes = [];
-  // const otherNodes = [];
-  // let mergedNodes = [];
-  // nodesArray.map(n => n.node.type === 'TEXT' ? textNodes.push(n) : otherNodes.push(n));
-  // mergedNodes = [...textNodes, ...otherNodes];
-  // // nodesArray.sort((a, b) => a.type === ChangeTypes.TEXT ? -1 : 0);
-
-  // mergedNodes.map((obj: any, rowIndex: number) => {
-  //   const nameArray = obj.node.name.split('#').filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
-
-  //   const prepareToChangeLayers = (node: any, name: string) => {
-  //     const layerSuffix: LayerNameSuffix = getLayerNameSuffix(name);
-  //     console.log('rowIndex:', rowIndex);
-  //     const layerValue = getValueFromLayerName(layerSuffix, data, name, rowIndex);
-
-  //     if (layerValue) {
-  //       changeLayers(node, layerValue);
-  //     } else {
-  //       console.warn('VALUE NOT FOUND FOR NODE:', node);
-  //     }
-  //   }
-
-  //   if (nameArray.length > 1) {
-  //     nameArray.map(layerName => {
-  //       prepareToChangeLayers(obj.node, layerName);
-  //     });
-  //   } else {
-  //     prepareToChangeLayers(obj.node, obj.node.name);
-  //   }
-  //   countLayersChanged++;
-  // });
-
-  // // notify node changes
-  // const msgPrefix = `Sync Complete ✅ -`;
-  // const msgSuffix = `based on [ ${selectionCount} ] selection${selectionCount > 0 ? 's' : '' }`;
-  // let notification: string;
-  // if (countLayersChanged > 0) {
-  //   notification = `${msgPrefix} [ ${countLayersChanged} ] layer${countLayersChanged > 1 ? 's' : ''} changed ${msgSuffix}`;
-  // } else {
-  //   notification = `${msgPrefix} No changes were made ${msgSuffix}`;
-  // }
-
-  // figma.notify(
-  //   notification,
-  //   { timeout: 5000 }
-  // );
-  // // figma.closePlugin();
+function checkIfFinished(outputVars: OutputVars, processed: boolean = true): void {
+  if (layerProcessedCount === outputVars.layersChangeNumber) {
+    finishSyncing(outputVars);
+  }
 }
 
 function getChangeCateoryBasedOnNodeTypeAndValue(type: NodeType, value: string): ChangeTypes {
@@ -391,23 +425,27 @@ function getChangeCateoryBasedOnNodeTypeAndValue(type: NodeType, value: string):
   }
 }
 
-// function checkIfFontIsCached(font): boolean {
-//   const match = fontsCache.some(f => JSON.stringify(f) === JSON.stringify(font));
+function nodeProcessedError(node: any, value: string, message: string = '', timeout: number = 1500): void {
+  const now = new Date();
+  layerNodeErrors.push({ type: node.type, name: node.name, value });
 
-//   if (match) {
-//     return true;
-//   } else {
-//     fontsCache.push(font);
-//     return false;
-//   }
-// }
+  const logError = () => {
+    if (message) message = ` - ${message}.`;
+    figma.notify(`⛔️ [${node.name}]${message}`, { timeout });
+  }
 
-// async function getFontStyle(fontName: FontName): Promise<any> {
-//   await figma.loadFontAsync(fontName);
-//   resolve();
-// }
+  if (dateNowErrorProcess === undefined) {
+    dateNowErrorProcess = new Date();
+    logError();
+  }
 
-async function changeLayers(node: any, value: any): Promise<void> {
+  // if more than 2secs past since last error notify
+  if (now.getTime() - dateNowErrorProcess.getTime() > 2000) {
+    logError();
+  }
+}
+
+async function changeLayers(node: any, value: string, outputVars: OutputVars): Promise<void> {
   const changeType: ChangeTypes = getChangeCateoryBasedOnNodeTypeAndValue(node.type, value);
   // console.log('type:', type);
   // console.log('node:', node);
@@ -418,21 +456,14 @@ async function changeLayers(node: any, value: any): Promise<void> {
   if (changeType) {
     // change text
     if (changeType === ChangeTypes.TEXT) {
-      // if text node has multiple mixed text styles
+      // prevent text node that has multiple mixed text styles
       if (typeof node.fontName === 'symbol') {
+        nodeProcessedError(node, value, 'Has mixed fonts');
         return;
       }
 
-      // APPARENTLY THIS DOESN'T WORK! It has to load all node text fonts everytime so it's slower :(
-      // const fontExists = checkIfFontIsCached(node.fontName);
-      // if (!fontExists) {
-      //   // console.log('NEW_FONT:', node.fontName);
-      //   await figma.loadFontAsync(node.fontName as FontName);
-      //   // getFontStyle(node.fontname).then(() => {});
-      // }
-
-      // have to use this always
-      await figma.loadFontAsync(node.fontName as FontName);
+      // have to use this always0
+      await figma.loadFontAsync(node.fontName as FontName); // it's faster loading font for each node here and doesn't hog the memory for a longperiod of time
 
       // reset text
       const layerOriginalName = getOriginalTextIfInsideInstanceComponent(node);
@@ -442,9 +473,7 @@ async function changeLayers(node: any, value: any): Promise<void> {
         }
       }
 
-      // console.time('has-placeholder');
       const placeholder = stringHasPlaceholdersInsideText(node.characters);
-      // console.timeEnd('has-placeholder');
       let phrase = placeholder.phrase;
       if (placeholder.hasPlaceholders) {
         placeholder.placeholders.map((ph: string) => {
@@ -459,10 +488,10 @@ async function changeLayers(node: any, value: any): Promise<void> {
     // change color fill
     if (changeType === ChangeTypes.COLOR_FILL) {
       if (node?.fills) {
-        const colorHex = getColorHexFromValue(value);
-        const colorRgba = convertColoHexToRgba(colorHex);
+        const colorHex: string = getColorHexFromValue(value);
+        const colorRgba: RGBA = convertColoHexToRgba(colorHex);
         const color: RGB = getFigmaColorRGB(colorRgba);
-        const fills = [{ type: 'SOLID', color: { r: color.r, g: color.g, b: color.b }, opacity: colorRgba.a }];
+        const fills: Paint[] = [{ type: 'SOLID', color: { r: color.r, g: color.g, b: color.b }, opacity: colorRgba.a }];
         // const fills = {
         //   type: 'SOLID',
         //   visible: true,
@@ -481,12 +510,14 @@ async function changeLayers(node: any, value: any): Promise<void> {
     // change color stroke
     if (changeType === ChangeTypes.COLOR_STROKE) {
       if (node?.strokes) {
-        let strokeWeight = value.match(new RegExp(`^\/(?:[0-9]+)(\|#)`, 'g'));
+        // console.log('node:', node);
+        // console.log('STROKE:', node.strokeAlign);
+        let strokeWeight: string | RegExpMatchArray = value.match(new RegExp(`^\/(?:[0-9]+)(\|#)`, 'g'));
         if (strokeWeight) strokeWeight = strokeWeight[0].match(new RegExp(`[0-9]+`, 'g'))[0];
-        const colorHex = getColorHexFromValue(value);
-        const colorRgba = convertColoHexToRgba(colorHex);
+        const colorHex: string = getColorHexFromValue(value);
+        const colorRgba: RGBA = convertColoHexToRgba(colorHex);
         const color: RGB = getFigmaColorRGB(colorRgba);
-        const strokes = [{ type: 'SOLID', color: { r: color.r, g: color.g, b: color.b }, opacity: colorRgba.a }];
+        const strokes: Paint[] = [{ type: 'SOLID', color: { r: color.r, g: color.g, b: color.b }, opacity: colorRgba.a }];
         // const strokes = {
         //   type: 'SOLID',
         //   visible: true,
@@ -499,23 +530,34 @@ async function changeLayers(node: any, value: any): Promise<void> {
         //   }
         // }
         node.strokes = strokes;
-        node.strokeAlign = 'INSIDE'; // 'INSIDE' | 'OUTSIDE' | 'CENTER'
+        if (!node.strokeAlign) {
+          node.strokeAlign = 'INSIDE'; // 'INSIDE' | 'OUTSIDE' | 'CENTER'
+        }
         if (strokeWeight) node.strokeWeight = +strokeWeight;
       }
     }
 
     // change variant
     if (changeType === ChangeTypes.VARIANT) {
-      const variantSet = node?.mainComponent?.parent;
-      if (variantSet && variantSet.type === 'COMPONENT_SET') {
-        const variant = variantSet.findChild(n => n.name === value)
-        node.swapComponent(variant);
+      const variantSet: ComponentSetNode = node?.mainComponent?.parent;
+      if (variantSet?.type === 'COMPONENT_SET') {
+        const variant = variantSet.findChild(n => n.name === value);
+
+        if (variant) {
+          // required otherwise gives error when main variant layer name is something like '#Variant.randsave'
+          const originalName = node.name;
+          node.name = 'temp_name';
+          setTimeout(() => {
+            node.swapComponent(variant);
+            node.name = originalName;
+          }, 10);
+        }
       }
     }
 
     // change show/hide
     if (changeType === ChangeTypes.SHOW_HIDE) {
-      const formattedValue = value.toLowerCase().replace('/', '');
+      const formattedValue: string = value.toLowerCase().replace('/', '');
 
       if (formattedValue === 'show') {
         node.visible = true;
@@ -540,34 +582,55 @@ async function changeLayers(node: any, value: any): Promise<void> {
       }
     }
   }
+
+  layerProcessedCount++;
+  checkIfFinished(outputVars);
+  // figma.ui.postMessage({ type: 'update-node-loading', nodesCount: outputVars.nodeNumber });
 }
 
-function getValueFromLayerName(layerSuffix: LayerNameSuffix, data: any, layerName: string, row: number): string {
-  layerName = getLayerNameWithoutPrefixAndSuffix(layerName);
+function getValueFromLayerName(data: DataProcess[], layerName: string, layerSuffix: LayerNameSuffix, row: number[], randomSaveNumber: number[]): string {
+  let dataRow;
   let value: string;
   let positionIndex: number;
 
-  if (layerSuffix) {
-    if (typeof layerSuffix === 'string' && layerSuffix === SuffixSpecial.RANDOM) {
-      positionIndex = Math.floor(Math.random() * (data.length));
-    }
+  layerName = getLayerNameWithoutPrefixAndSuffix(layerName);
 
-    if (typeof layerSuffix === 'string' && layerSuffix === SuffixSpecial.RANDOM_SAVE) {
-      positionIndex = randomSaveNumber;
+  data.map((sheet, index) => {
+    sheet.data.map(row => {
+      if (row.hasOwnProperty(layerName)) {
+        // get sheet from where layerName matches column name
+        if (dataRow === undefined) dataRow = index;
+      }
+    });
+  });
+
+  if (layerSuffix) {
+    if (typeof layerSuffix === 'string') {
+      if (layerSuffix === SuffixSpecial.RANDOM) {
+        positionIndex = Math.floor(Math.random() * (data[dataRow].data.length));
+      }
+
+      if (layerSuffix === SuffixSpecial.RANDOM_SAVE) {
+        positionIndex = randomSaveNumber[dataRow];
+      }
     }
 
     if (typeof layerSuffix === 'number') {
-      positionIndex = layerSuffix >= data.length - 1 ? data.length - 1 : layerSuffix - 1;
+      positionIndex = layerSuffix >= data[dataRow].data.length - 1 ? data[dataRow].data.length - 1 : layerSuffix - 1;
     }
   } else {
-    positionIndex = row;
+    positionIndex = row[dataRow];
     value = layerName;
   }
 
-  if (data[positionIndex][layerName]) {
-    value = data[positionIndex][layerName];
-  } else {
+  if (dataRow === undefined || positionIndex === undefined) {
     value = null;
+  } else {
+    if (data[dataRow].data[positionIndex][layerName]) {
+      value = data[dataRow].data[positionIndex][layerName];
+    } else {
+      value = null;
+    }
   }
 
   return value;
@@ -575,22 +638,26 @@ function getValueFromLayerName(layerSuffix: LayerNameSuffix, data: any, layerNam
 
 function getOriginalTextIfInsideInstanceComponent(textNode: TextNode): string {
   // const mainNodeSelectedId = mainNodeSelected.id;
-  const textNodeId = textNode.id;
-  const textNodeIdArray = textNodeId.split(';');
-  const textNodeIdCleanArray = textNodeIdArray.map(name => name.replace(/([a-z]|[A-Z])/g, ''));
-  const textNodeSingleId = textNodeIdArray[textNodeIdArray.length - 1];
-  let nodeTextCharacters;
+  const textNodeId: string = textNode.id;
+  const textNodeIdArray: string[] = textNodeId.split(';');
+  const textNodeIdCleanArray: string[] = textNodeIdArray.map(name => name.replace(/([a-z]|[A-Z])/g, ''));
+  const textNodeSingleId: string = textNodeIdArray[textNodeIdArray.length - 1];
+  let nodeTextCharacters: string;
 
   if (textNodeIdArray.length > 1) {
     const instanceId = textNodeIdCleanArray[textNodeIdCleanArray.length - 2];
-    const mainComponent = (figma.getNodeById(instanceId) as InstanceNode).mainComponent as ComponentNode;
+    const mainComponent = (figma.getNodeById(instanceId) as InstanceNode)?.mainComponent as ComponentNode;
 
-    mainComponent.findAll(node => {
-      if (node.type === 'TEXT' && node.id === textNodeSingleId) {
-        nodeTextCharacters = (node as TextNode).characters;
-      }
+    if (mainComponent) {
+      mainComponent.findAll(node => {
+        if (node.type === 'TEXT' && node.id === textNodeSingleId) {
+          nodeTextCharacters = (node as TextNode).characters;
+        }
+        return null;
+      });
+    } else {
       return null;
-    });
+    }
   }
 
   return nodeTextCharacters;
@@ -602,13 +669,49 @@ function checkForUserSelections(): void {
 
   const layerNamesArray = getLayerNames();
 
+  // get all nodes to process
+  const nodesArray: SelectedNode[] = [];
+  let totalLayerChanges: number = 0;
+
+  layerSelction.map((nodeSelected: any, index: number) => {
+    if (nodeSelected.children) {
+      nodeSelected.findAll((node: SceneNode) => {
+        if (node.name.startsWith(layerNamePrefix)) {
+          const nameArray = node.name.split(layerNamePrefix).filter((str: string) => str !== '').map((str: string) => `${layerNamePrefix}${str}`);
+          totalLayerChanges = totalLayerChanges + nameArray.length;
+          nodesArray.push({ index, node: node, type: node.type, layerChanges: nameArray.length });
+        }
+      });
+    }
+  });
+
+  // get how much of each nodes to process
+  const nodeTypesArray: SelectedNodeType[] = [];
+  nodesArray.map(layer => {
+    if (!nodeTypesArray.some(t => t.type === layer.type)) {
+      nodeTypesArray.push({ type: layer.type, count: 1 });
+    } else {
+      const index = nodeTypesArray.findIndex(obj => obj.type === layer.type);
+      const count = nodeTypesArray[index].count;
+      nodeTypesArray[index].count = count + 1;
+    }
+  });
+
+  selectedNodesInfo = {
+    nodes: nodesArray,
+    typesQuantity: nodeTypesArray,
+    totalLayerChanges
+  }
+
+  outputVars.layersChangeNumber = totalLayerChanges;
+
+  figma.ui.postMessage({ type: 'update-nodes-count', selectedNodesInfo });
+
   if (layerSelctionCount > 0) {
     // if all selections have children (to process)
     const allSelectionsHaveChildren = layerSelction.every(node => (node as FrameNode).children);
 
-    if (selectDebug) {
-      layerSelction.map(node => console.log( node));
-    }
+    if (debugSelectedNodes) layerSelction.map(node => console.log(node));
 
     if (allSelectionsHaveChildren) {
       figma.ui.postMessage({
@@ -645,6 +748,45 @@ function checkForUserSelections(): void {
   }
 }
 
+function finishSyncing(outputVars: OutputVars): void {
+  // if (loadingNotification) {
+  //   loadingNotification();
+  // }
+
+  // time thet took the plugin to process
+  const timeNow = loggerTimeStamp('SYNC END');
+  const timeSuffix = `${formatMsToTime(timeNow - loggerGetTime('start'))}`;
+
+  const getLayerSingularPlural = (count, naming: string = 'Layer') => {
+    return `${naming}${count > 1 ? 's' : ''}`;
+  }
+
+  // notify node changes
+  const msgPrefix = `Sync Complete: `;
+  const totalFailed = outputVars.totalNodes == layerNodeErrors.length;
+  const msgLayersSuccess = `${totalFailed ? '' : `✅ [${outputVars.totalNodes - layerNodeErrors.length}] `}`;
+  const msgLayersError = `${totalFailed ? '' : 'and '}⛔️ [${layerNodeErrors.length}] `;
+  const msgSuffix = `based on ✏️ [${outputVars.selectionCount}] ${getLayerSingularPlural(outputVars.selectionCount, 'selection')} `;
+  let notification: string;
+  if (outputVars.totalNodes > 0) {
+    notification = `${msgPrefix} ${msgLayersSuccess}${msgLayersError}${msgSuffix} - ${timeSuffix}`;
+  } else {
+    notification = `${msgPrefix} No changes were made ${msgSuffix}`;
+  }
+
+  // figma.ui.postMessage({ type: 'end-loading' });
+
+  // if (layerNodeErrors.length) {
+  //   figma.notify(`⛔️ [${layerNodeErrors[0].name}] - Has mixed fonts.`, { timeout: 3000 });
+  // }
+
+  figma.notify(
+    notification,
+    { timeout: layerNodeErrors.length > 0 ? 6500 : 5000 }
+  );
+  // figma.closePlugin();
+}
+
 
 
 // spreadsheet --------------------
@@ -653,11 +795,12 @@ function getSpreadsheetId(sheetUrl: string): string {
   return new RegExp('/spreadsheets/d/([a-zA-Z0-9-_]+)').exec(sheetUrl)[1];
 }
 
-function getSpreadsheetData(url: string, type: UrlDataType): UrlData {
+function getSpreadsheetData(url: string, type: UrlDataType, spreadsheetData: SpreadsheetData = null): UrlData {
   const sheetUrlPrefix: string = 'https://sheets.googleapis.com/v4/spreadsheets/';
+  const sheetUrlSuffix: string = `alt=json&key=${API_KEY}`;
   const sheetId: string = getSpreadsheetId(url);
   const sheetRange: string = 'A1:ZZZ100000000'; // https://developers.google.com/sheets/api/guides/concepts#a1_notation
-  let dataUrl: string;
+  let dataUrl: string = `${sheetUrlPrefix}${sheetId}/values`;
   let dataType: UrlDataType;
 
   if (type === UrlDataType.SHEET) {
@@ -666,7 +809,13 @@ function getSpreadsheetData(url: string, type: UrlDataType): UrlData {
   }
 
   if (type === UrlDataType.VALUES) {
-    dataUrl = `${sheetUrlPrefix}${sheetId}/values/${sheetRange}?alt=json&key=${API_KEY}`;
+    if (spreadsheetData?.sheets.length > 1) {
+      dataUrl = `${dataUrl}:batchGet`;
+      spreadsheetData?.sheets?.map((sheet, index) => dataUrl = `${dataUrl}${index === 0 ? '?' : '&'}ranges=${encodeURI(sheet.title)}`);
+      dataUrl = `${dataUrl}&${sheetUrlSuffix}`;
+    } else {
+      dataUrl = `${dataUrl}/${sheetRange}?${sheetUrlSuffix}`;
+    }
     dataType = UrlDataType.VALUES;
   }
 
@@ -763,9 +912,9 @@ function getLayerNames(): string[] {
 }
 
 function changeLayerNameMultiple(layerNameOld, layerNameNew): string {
-  const layerNameOldArray = layerNameOld.split('#').filter(str => str !== '').map(str => `#${str}`);
-  const layerNameOldArrayNoSuffix = layerNameOldArray.map(str => str.split('.')[0]);
-  const layerNameNewNoSuffix = layerNameNew.split('.')[0];
+  const layerNameOldArray = layerNameOld.split(layerNamePrefix).filter(str => str !== '').map(str => `${layerNamePrefix}${str}`);
+  const layerNameOldArrayNoSuffix = layerNameOldArray.map(str => getLayerNameWithoutSuffix(str));
+  const layerNameNewNoSuffix = getLayerNameWithoutSuffix(layerNameNew);
 
   if (layerNameOldArrayNoSuffix.includes(layerNameNewNoSuffix)) {
     let layerNameCurrent: string;
