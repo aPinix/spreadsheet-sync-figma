@@ -1,6 +1,6 @@
 # Spreadsheet Sync
 
-![Cover Art](./assets/cover-art.jpg)
+![Cover Art](./assets/spreadsheet-sync.gif)
 
 <br>
 
